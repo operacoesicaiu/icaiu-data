@@ -1,0 +1,32 @@
+name: Zenvia Worker Sync
+
+on:
+  repository_dispatch:
+    types: [google_token_ready]
+
+jobs:
+  run-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install googleapis axios
+
+      - name: Execute Sync Logic
+        env:
+          GOOGLE_TOKEN:  ${{ secrets.GOOGLE_TOKEN }}
+          ZENVIA_ACCESS_TOKEN: ${{ secrets.ZENVIA_ACCESS_TOKEN }}
+          ZENVIA_QUEUE_ID: ${{ secrets.ZENVIA_QUEUE_ID }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_NAME: ${{ secrets.SHEET_NAME }}
+        run: node index.js
