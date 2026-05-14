@@ -1,0 +1,28 @@
+name: Hablla Clients
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - run: node src/hablla/hablla-clients.js
+        env:
+
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          HABLLA_TOKEN: ${{ secrets.HABLLA_TOKEN }}
+          HABLLA_WORKSPACE_ID: ${{ secrets.HABLLA_WORKSPACE_ID }}

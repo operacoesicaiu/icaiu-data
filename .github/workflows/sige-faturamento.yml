@@ -1,0 +1,31 @@
+name: SIGE Faturamento
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - run: node src/sige/sige-faturamento.js
+        env:
+
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          SIGE_TOKEN: ${{ secrets.SIGE_TOKEN }}
+          SIGE_USER: ${{ secrets.SIGE_USER }}
+          SIGE_APP: ${{ secrets.SIGE_APP }}
