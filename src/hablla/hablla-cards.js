@@ -7,46 +7,26 @@ async function run() {
     console.log('[contact_hablla] Sincronizando cards...');
 
     const headers = await getHabllaHeaders();
-
-    const seteDiasAtras = new Date();
-    seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
-    seteDiasAtras.setHours(0, 0, 0, 0);
+    const quinzeDias = new Date();
+    quinzeDias.setDate(quinzeDias.getDate() - 15);
+    quinzeDias.setHours(0, 0, 0, 0);
 
     let page = 1;
-
     while (page <= 500) {
       const res = await axios.get(
         `https://api.hablla.com/v3/workspaces/${process.env.HABLLA_WORKSPACE_ID}/cards`,
-        {
-          params: {
-            board: process.env.HABLLA_BOARD_ID,
-            limit: 50,
-            page,
-            updated_after: seteDiasAtras.toISOString()
-          },
-          headers
-        }
+        { params: { board: process.env.HABLLA_BOARD_ID, limit: 50, page, updated_after: quinzeDias.toISOString() }, headers }
       );
-
       const cards = res.data.results || [];
       if (!cards.length) break;
 
-      const rows = cards.map(item => ({
-        id: `card-${item.id}`,
-        source: 'card',
-        raw_payload: item,
-        fetched_at: new Date().toISOString()
-      }));
+      const rows = cards.map(item => ({ external_id: `card-${item.id}`, payload: item }));
 
-      const { error } = await supabase
-        .from('contact_hablla')
-        .upsert(rows, { onConflict: 'id' });
-
+      const { error } = await supabase.from('contact_hablla').upsert(rows, { onConflict: 'external_id' });
       if (error) throw error;
-      console.log(`[contact_hablla] Página ${page} sincronizada (${rows.length} cards)`);
+      console.log(`[contact_hablla] Página ${page}: ${rows.length} cards`);
       page++;
     }
-
     console.log('[contact_hablla] Cards finalizado.');
   } catch (err) {
     console.error('[contact_hablla] Erro cards:', err.response?.data || err.message);
