@@ -45,7 +45,7 @@ async function main() {
     }
   }
 
-  console.log('\n✅ Todos os scripts finalizados.');
+  console.log('\nTodos os scripts finalizados.');
 }
 
 main().catch(err => {
