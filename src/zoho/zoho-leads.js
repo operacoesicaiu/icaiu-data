@@ -1,140 +1,67 @@
 const axios = require('axios');
 const supabase = require('../lib/supabase');
-const getZohoToken = require('../lib/zoho-auth');
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-function sanitize(val) {
-    if (typeof val !== 'string') return val;
-
-    const formulaChars = ['=', '+', '-', '@'];
-
-    if (formulaChars.some(c => val.startsWith(c))) {
-        return `'${val}`;
-    }
-
-    return val;
-}
-
-function extractValue(value) {
-    if (value === null || value === undefined || value === '') {
-        return '';
-    }
-
-    if (typeof value === 'object' && !Array.isArray(value)) {
-        return sanitize(value.display_value || value.ID || String(value));
-    }
-
-    if (Array.isArray(value)) {
-        return sanitize(
-            value.map(v =>
-                typeof v === 'object'
-                    ? v.display_value || v
-                    : v
-            ).join(', ')
-        );
-    }
-
-    return sanitize(String(value));
-}
+const getZohoToken = require('./zoho-auth');
 
 async function run() {
-    try {
-        const {
-            ZOHO_ACCOUNT_OWNER,
-            ZOHO_LEADS_APP_NAME,
-            ZOHO_LEADS_REPORT_NAME,
-            ZOHO_LEADS_COLUMN_MAPPING
-        } = process.env;
+  try {
+    console.log('[contact_site] Sincronizando leads...');
 
-        const mapping = JSON.parse(ZOHO_LEADS_COLUMN_MAPPING);
+    const {
+      ZOHO_ACCOUNT_OWNER,
+      ZOHO_LEADS_APP_NAME,
+      ZOHO_LEADS_REPORT_NAME
+    } = process.env;
 
-        const zohoToken = await getZohoToken();
+    const zohoToken = await getZohoToken();
 
-        const meses = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const meses = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const ontem = new Date();
+    ontem.setDate(ontem.getDate() - 1);
+    const dataFiltro = `${String(ontem.getDate()).padStart(2,'0')}-${meses[ontem.getMonth()]}-${ontem.getFullYear()}`;
 
-        const ontem = new Date();
-        ontem.setDate(ontem.getDate() - 1);
+    let from = 1;
+    const limit = 200;
+    let finalRows = [];
 
-        const dataFiltro = `${String(ontem.getDate()).padStart(2,'0')}-${meses[ontem.getMonth()]}-${ontem.getFullYear()}`;
+    while (true) {
+      const criteria =
+        `(Data_e_hora_de_inicio_do_formul_rio >= "${dataFiltro} 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "${dataFiltro} 23:59:59")`;
 
-        let from = 1;
-        const limit = 200;
+      const url =
+        `https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_LEADS_APP_NAME}/report/${ZOHO_LEADS_REPORT_NAME}`;
 
-        let finalRows = [];
+      const resp = await axios.get(url, {
+        params: { from, limit, criteria },
+        headers: { Authorization: `Zoho-oauthtoken ${zohoToken}` }
+      });
 
-        while (true) {
+      const data = resp.data.data || [];
+      if (!data.length) break;
 
-            const criteria =
-                `(Data_e_hora_de_inicio_do_formul_rio >= "${dataFiltro} 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "${dataFiltro} 23:59:59")`;
+      for (const record of data) {
+        finalRows.push({
+          id: `lead-${record.ID}`,
+          raw_payload: record,
+          fetched_at: new Date().toISOString()
+        });
+      }
 
-            const url =
-                `https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_LEADS_APP_NAME}/report/${ZOHO_LEADS_REPORT_NAME}`;
-
-            const resp = await axios.get(url, {
-                params: {
-                    from,
-                    limit,
-                    criteria
-                },
-                headers: {
-                    Authorization: `Zoho-oauthtoken ${zohoToken}`
-                }
-            });
-
-            const data = resp.data.data || [];
-
-            if (data.length === 0) {
-                break;
-            }
-
-            for (const record of data) {
-
-                const row = {};
-
-                Object.entries(mapping).forEach(([column, zohoField]) => {
-                    row[column] = extractValue(record[zohoField]);
-                });
-
-                if (record.ID) {
-                    row.zoho_id = String(record.ID);
-                }
-
-                finalRows.push(row);
-            }
-
-            if (data.length < limit) {
-                break;
-            }
-
-            from += limit;
-
-            await sleep(1000);
-        }
-
-        if (finalRows.length > 0) {
-
-            const { error } = await supabase
-                .from('zoho_leads')
-                .upsert(finalRows, {
-                    onConflict: 'zoho_id'
-                });
-
-            if (error) {
-                throw error;
-            }
-        }
-
-        console.log(`Leads sincronizados: ${finalRows.length}`);
-
-    } catch (e) {
-
-        console.error(
-            e.response?.data || e.message
-        );
-
-        process.exit(1);
+      if (data.length < limit) break;
+      from += limit;
     }
+
+    if (finalRows.length > 0) {
+      const { error } = await supabase
+        .from('contact_site')
+        .upsert(finalRows, { onConflict: 'id' });
+      if (error) throw error;
+    }
+
+    console.log(`[contact_site] Leads sincronizados: ${finalRows.length}`);
+  } catch (e) {
+    console.error('[contact_site] Erro:', e.response?.data || e.message);
+    process.exit(1);
+  }
 }
 
-run();
+module.exports = run;

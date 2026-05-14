@@ -5,32 +5,21 @@ on:
 
 jobs:
   run:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 45
-
     steps:
-
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - run: npm install
-
       - run: node src/zoho/zoho-scheduling.js
         env:
-
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
           ZOHO_ACCOUNT_OWNER: ${{ secrets.ZOHO_ACCOUNT_OWNER }}
-
           ZOHO_SCHEDULING_APP_NAME: ${{ secrets.ZOHO_SCHEDULING_APP_NAME }}
           ZOHO_SCHEDULING_REPORT_NAME: ${{ secrets.ZOHO_SCHEDULING_REPORT_NAME }}
-          ZOHO_SCHEDULING_COLUMN_MAPPING: ${{ secrets.ZOHO_SCHEDULING_COLUMN_MAPPING }}

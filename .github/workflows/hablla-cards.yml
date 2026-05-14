@@ -5,31 +5,22 @@ on:
 
 jobs:
   run:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 30
-
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Install dependencies
         run: npm install
-
       - name: Run integration
         run: node src/hablla/hablla-cards.js
         env:
-
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
           HABLLA_TOKEN: ${{ secrets.HABLLA_TOKEN }}
           HABLLA_WORKSPACE_ID: ${{ secrets.HABLLA_WORKSPACE_ID }}
           HABLLA_BOARD_ID: ${{ secrets.HABLLA_BOARD_ID }}
