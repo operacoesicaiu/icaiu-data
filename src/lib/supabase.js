@@ -5,7 +5,8 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   {
-    realtime: { enabled: false }
+    realtime: { enabled: false },
+    global: { realtime: { enabled: false } }
   }
 );
 
