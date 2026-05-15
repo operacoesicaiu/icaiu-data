@@ -53,7 +53,7 @@ async function run() {
         const eid = `attendant-${range.day}-${attendantId}`;
         if (seen.has(eid)) continue;
         seen.add(eid);
-        rows.push({ external_id: eid, payload: { day: range.day, ...item } });
+        rows.push({ external_id: eid, payload: item });
         dayCount++;
       }
       console.log(`[raw_cs_avaliacao_atendimento] ${range.day}: ${dayCount} attendants.`);
