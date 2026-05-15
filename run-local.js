@@ -6,7 +6,6 @@
  *   node run-local.js                     → roda todos
  *   node run-local.js telefonia           → só telefonia
  *   node run-local.js hablla-attendants   → só hablla attendants
- *   node run-local.js hablla-card-person-link-diagnostic
  *   node run-local.js hablla-cards
  *   node run-local.js hablla-clients
  *   node run-local.js zoho-leads-recent
@@ -21,7 +20,6 @@ require('dotenv').config();
 const scripts = {
   telefonia:        require('./src/zenvia/zenvia-calls'),
   'hablla-attendants': require('./src/hablla/hablla-attendants'),
-  'hablla-card-person-link-diagnostic': require('./src/hablla/hablla-card-person-link-diagnostic'),
   'hablla-cards':   require('./src/hablla/hablla-cards'),
   'hablla-clients': require('./src/hablla/hablla-clients'),
   'zoho-leads-recent': require('./src/zoho/zoho-leads-recent'),
