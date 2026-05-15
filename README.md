@@ -112,7 +112,7 @@ Por isso a estratégia adotada aqui é:
 - Arquivo: `src/hablla/hablla-cards.js`
 - Fonte: endpoint de `cards`
 - Destino: `raw_events_hablla`
-- Janela: últimos 15 dias
+- Janela: ultimos 7 dias por padrao (`HABLLA_CARDS_DAYS`)
 - Identificador externo: `card-{id}`
 - Objetivo: persistir os cards brutos do board configurado
 
@@ -258,6 +258,8 @@ Use `.env.example` como referência local. Em produção, os mesmos nomes devem 
 | `HABLLA_PASSWORD` | fallback de login |
 | `HABLLA_WORKSPACE_ID` | workspace da Hablla |
 | `HABLLA_BOARD_ID` | board consultado por cards |
+| `HABLLA_CARDS_DAYS` | quantidade de dias da janela de cards; padrao 7 |
+| `HABLLA_CARDS_MAX_PAGES` | limite defensivo de paginas em cards; padrao 500 |
 | `HABLLA_ATTENDANTS_DAYS` | quantidade de dias no sync diário de attendants |
 
 ### Zenvia
