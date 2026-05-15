@@ -1,4 +1,5 @@
 const runZohoSchedulingSync = require('./zoho-scheduling-sync');
+const formatPublicError = require('../lib/public-error');
 
 async function run() {
   try {
@@ -7,7 +8,7 @@ async function run() {
     const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
     await runZohoSchedulingSync({ startDate, endDate, label: 'mês atual + mês anterior' });
   } catch (e) {
-    console.error('[events_agendamento] Erro:', e.response?.data || e.message);
+    console.error('[events_agendamento] Erro:', formatPublicError(e));
     process.exit(1);
   }
 }

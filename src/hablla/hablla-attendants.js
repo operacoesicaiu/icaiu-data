@@ -1,6 +1,7 @@
 const axios = require('axios');
 const supabase = require('../lib/supabase');
 const getHabllaHeaders = require('./hablla-auth');
+const formatPublicError = require('../lib/public-error');
 
 function dayRange(daysAgo) {
   const base = new Date();
@@ -67,7 +68,7 @@ async function run() {
     if (error) throw error;
     console.log(`[raw_cs_avaliacao_atendimento] ${rows.length} attendants enviados.`);
   } catch (err) {
-    console.error('[raw_cs_avaliacao_atendimento] Erro:', err.response?.data || err.message);
+    console.error('[raw_cs_avaliacao_atendimento] Erro:', formatPublicError(err));
     process.exit(1);
   }
 }

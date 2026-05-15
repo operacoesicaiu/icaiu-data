@@ -1,5 +1,6 @@
 const axios = require('axios');
 const supabase = require('../lib/supabase');
+const formatPublicError = require('../lib/public-error');
 
 const { SIGE_TOKEN, SIGE_USER, SIGE_APP } = process.env;
 
@@ -43,7 +44,7 @@ async function run() {
 
     console.log('[raw_events_faturado] Concluído.');
   } catch (err) {
-    console.error('[raw_events_faturado] Erro:', err.response?.data || err.message);
+    console.error('[raw_events_faturado] Erro:', formatPublicError(err));
     process.exit(1);
   }
 }

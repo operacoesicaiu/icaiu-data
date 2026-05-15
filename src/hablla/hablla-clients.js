@@ -1,6 +1,7 @@
 const axios = require('axios');
 const supabase = require('../lib/supabase');
 const getHabllaHeaders = require('./hablla-auth');
+const formatPublicError = require('../lib/public-error');
 
 async function run() {
   try {
@@ -34,7 +35,7 @@ async function run() {
     if (error) throw error;
     console.log(`[raw_contact_hablla] ${rows.length} clientes.`);
   } catch (err) {
-    console.error('[raw_contact_hablla] Erro clients:', err.response?.data || err.message);
+    console.error('[raw_contact_hablla] Erro clients:', formatPublicError(err));
     process.exit(1);
   }
 }

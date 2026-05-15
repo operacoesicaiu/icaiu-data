@@ -1,6 +1,7 @@
 const axios = require('axios');
 const supabase = require('../lib/supabase');
 const getHabllaHeaders = require('./hablla-auth');
+const formatPublicError = require('../lib/public-error');
 
 async function run() {
   try {
@@ -29,7 +30,7 @@ async function run() {
     }
     console.log('[raw_events_hablla] Cards finalizado.');
   } catch (err) {
-    console.error('[raw_events_hablla] Erro cards:', err.response?.data || err.message);
+    console.error('[raw_events_hablla] Erro cards:', formatPublicError(err));
     process.exit(1);
   }
 }

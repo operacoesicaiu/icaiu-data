@@ -1,5 +1,6 @@
 const axios = require('axios');
 const supabase = require('../lib/supabase');
+const formatPublicError = require('../lib/public-error');
 
 const { ZENVIA_ACCESS_TOKEN, ZENVIA_QUEUE_ID } = process.env;
 
@@ -40,7 +41,7 @@ async function run() {
     }
     console.log(`[raw_contact_telefonia] ${rows.length} registros sincronizados.`);
   } catch (err) {
-    console.error('[raw_contact_telefonia] Erro:', err.response?.data || err.message);
+    console.error('[raw_contact_telefonia] Erro:', formatPublicError(err));
     process.exit(1);
   }
 }
