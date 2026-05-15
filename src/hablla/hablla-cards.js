@@ -4,7 +4,7 @@ const getHabllaHeaders = require('./hablla-auth');
 
 async function run() {
   try {
-    console.log('[contact_hablla] Sincronizando cards...');
+    console.log('[raw_events_hablla] Sincronizando cards...');
 
     const headers = await getHabllaHeaders();
     const quinzeDias = new Date();
@@ -22,14 +22,14 @@ async function run() {
 
       const rows = cards.map(item => ({ external_id: `card-${item.id}`, payload: item }));
 
-      const { error } = await supabase.from('contact_hablla').upsert(rows, { onConflict: 'external_id' });
+      const { error } = await supabase.from('raw_events_hablla').upsert(rows, { onConflict: 'external_id' });
       if (error) throw error;
-      console.log(`[contact_hablla] Página ${page}: ${rows.length} cards`);
+      console.log(`[raw_events_hablla] Página ${page}: ${rows.length} cards`);
       page++;
     }
-    console.log('[contact_hablla] Cards finalizado.');
+    console.log('[raw_events_hablla] Cards finalizado.');
   } catch (err) {
-    console.error('[contact_hablla] Erro cards:', err.response?.data || err.message);
+    console.error('[raw_events_hablla] Erro cards:', err.response?.data || err.message);
     process.exit(1);
   }
 }

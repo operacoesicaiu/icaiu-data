@@ -1,6 +1,8 @@
 name: SIGE Faturamento
 
 on:
+  schedule:
+    - cron: '47 4 * * *'
   workflow_dispatch:
 
 jobs:

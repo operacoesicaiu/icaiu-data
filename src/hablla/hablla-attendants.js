@@ -2,38 +2,72 @@ const axios = require('axios');
 const supabase = require('../lib/supabase');
 const getHabllaHeaders = require('./hablla-auth');
 
+function dayRange(daysAgo) {
+  const base = new Date();
+  base.setDate(base.getDate() - daysAgo);
+
+  const start = new Date(base);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(base);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    day: start.toISOString().slice(0, 10),
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
 async function run() {
   try {
-    console.log('[contact_hablla] Sincronizando attendants...');
+    console.log('[raw_cs_avaliacao_atendimento] Sincronizando attendants...');
 
     const headers = await getHabllaHeaders();
-    const quinzeDias = new Date();
-    quinzeDias.setDate(quinzeDias.getDate() - 15);
-    const dIni = new Date(quinzeDias.setHours(0, 0, 0, 0)).toISOString();
-    const dFim = new Date(quinzeDias.setHours(23, 59, 59, 999)).toISOString();
-
-    const res = await axios.get(
-      `https://api.hablla.com/v1/workspaces/${process.env.HABLLA_WORKSPACE_ID}/reports/services/summary`,
-      { params: { start_date: dIni, end_date: dFim }, headers }
-    );
-
-    const results = res.data.results || [];
-    if (!results.length) { console.log('[contact_hablla] Nenhum attendant.'); return; }
-
-    const seen = new Set();
-    const rows = [];
-    for (const item of results) {
-      const eid = `attendant-${dFim}-${item.user?.id || 'unknown'}`;
-      if (seen.has(eid)) continue;
-      seen.add(eid);
-      rows.push({ external_id: eid, payload: item });
+    const days = Number(process.env.HABLLA_ATTENDANTS_DAYS || 5);
+    if (!Number.isInteger(days) || days < 1) {
+      throw new Error('HABLLA_ATTENDANTS_DAYS precisa ser inteiro >= 1');
     }
 
-    const { error } = await supabase.from('contact_hablla').upsert(rows, { onConflict: 'external_id' });
+    const rows = [];
+    const seen = new Set();
+
+    for (let i = days - 1; i >= 0; i--) {
+      const range = dayRange(i);
+      const res = await axios.get(
+        `https://api.hablla.com/v1/workspaces/${process.env.HABLLA_WORKSPACE_ID}/reports/services/summary`,
+        { params: { start_date: range.start, end_date: range.end }, headers }
+      );
+
+      const results = Array.isArray(res.data?.results) ? res.data.results : [];
+      if (!results.length) {
+        console.log(`[raw_cs_avaliacao_atendimento] ${range.day}: sem dados.`);
+        continue;
+      }
+
+      let dayCount = 0;
+      for (const item of results) {
+        const attendantId = item.user?.id || item.attendant_id || item.id;
+        if (!attendantId) continue;
+        const eid = `attendant-${range.day}-${attendantId}`;
+        if (seen.has(eid)) continue;
+        seen.add(eid);
+        rows.push({ external_id: eid, payload: { day: range.day, ...item } });
+        dayCount++;
+      }
+      console.log(`[raw_cs_avaliacao_atendimento] ${range.day}: ${dayCount} attendants.`);
+    }
+
+    if (!rows.length) {
+      console.log('[raw_cs_avaliacao_atendimento] Nenhum attendant com id válido.');
+      return;
+    }
+
+    const { error } = await supabase.from('raw_cs_avaliacao_atendimento').upsert(rows, { onConflict: 'external_id' });
     if (error) throw error;
-    console.log(`[contact_hablla] ${rows.length} attendants.`);
+    console.log(`[raw_cs_avaliacao_atendimento] ${rows.length} attendants enviados.`);
   } catch (err) {
-    console.error('[contact_hablla] Erro:', err.response?.data || err.message);
+    console.error('[raw_cs_avaliacao_atendimento] Erro:', err.response?.data || err.message);
     process.exit(1);
   }
 }

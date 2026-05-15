@@ -1,8 +1,8 @@
-name: Zoho Leads
+name: Zoho Leads Recent
 
 on:
   schedule:
-    - cron: '30 15 * * *'
+    - cron: '40 1,7,13,19 * * *'
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
         with:
           node-version: 20
       - run: npm install
-      - run: node src/zoho/zoho-leads.js
+      - run: node src/zoho/zoho-leads-recent.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

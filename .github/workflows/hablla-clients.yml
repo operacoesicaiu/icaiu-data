@@ -1,6 +1,8 @@
 name: Hablla Clients
 
 on:
+  schedule:
+    - cron: '5 3,9,15,21 * * *'
   workflow_dispatch:
 
 jobs:

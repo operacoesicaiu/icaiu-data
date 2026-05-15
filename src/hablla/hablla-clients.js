@@ -4,13 +4,14 @@ const getHabllaHeaders = require('./hablla-auth');
 
 async function run() {
   try {
-    console.log('[contact_hablla] Sincronizando clients...');
+    console.log('[raw_contact_hablla] Sincronizando clients...');
 
     const headers = await getHabllaHeaders();
-    const quinzeDias = new Date();
-    quinzeDias.setDate(quinzeDias.getDate() - 15);
-    const dIni = new Date(quinzeDias.setHours(0, 0, 0, 0)).toISOString();
-    const dFim = new Date(quinzeDias.setHours(23, 59, 59, 999)).toISOString();
+    const hoje = new Date();
+    const inicio = new Date(hoje);
+    inicio.setDate(inicio.getDate() - 4);
+    const dIni = new Date(inicio.setHours(0, 0, 0, 0)).toISOString();
+    const dFim = new Date(hoje.setHours(23, 59, 59, 999)).toISOString();
 
     let page = 1, allClients = [];
     while (page <= 150) {
@@ -25,15 +26,15 @@ async function run() {
       page++;
     }
 
-    if (!allClients.length) { console.log('[contact_hablla] Nenhum cliente.'); return; }
+    if (!allClients.length) { console.log('[raw_contact_hablla] Nenhum cliente.'); return; }
 
     const rows = allClients.map(item => ({ external_id: `client-${item.id}`, payload: item }));
 
-    const { error } = await supabase.from('contact_hablla').upsert(rows, { onConflict: 'external_id' });
+    const { error } = await supabase.from('raw_contact_hablla').upsert(rows, { onConflict: 'external_id' });
     if (error) throw error;
-    console.log(`[contact_hablla] ${rows.length} clientes.`);
+    console.log(`[raw_contact_hablla] ${rows.length} clientes.`);
   } catch (err) {
-    console.error('[contact_hablla] Erro clients:', err.response?.data || err.message);
+    console.error('[raw_contact_hablla] Erro clients:', err.response?.data || err.message);
     process.exit(1);
   }
 }

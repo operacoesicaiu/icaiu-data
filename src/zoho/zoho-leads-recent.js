@@ -2,7 +2,7 @@ const runZohoLeadsSync = require('./zoho-leads-sync');
 
 async function run() {
   try {
-    await runZohoLeadsSync({ days: 15, label: 'últimos 15 dias' });
+    await runZohoLeadsSync({ days: 7, label: 'últimos 7 dias' });
   } catch (e) {
     console.error('[contact_site] Erro:', e.response?.data || e.message);
     process.exit(1);

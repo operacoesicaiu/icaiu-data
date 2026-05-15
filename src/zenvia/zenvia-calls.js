@@ -5,11 +5,11 @@ const { ZENVIA_ACCESS_TOKEN, ZENVIA_QUEUE_ID } = process.env;
 
 async function run() {
   try {
-    console.log('[contact_telefonia] Iniciando...');
+    console.log('[raw_contact_telefonia] Iniciando...');
 
     const agora = new Date();
     const dsInicio = new Date(agora);
-    dsInicio.setDate(agora.getDate() - 15);
+    dsInicio.setDate(agora.getDate() - 4);
     const fmt = (d) => d.toISOString().split('T')[0];
 
     let allCalls = [], posicao = 0, limite = 200;
@@ -29,18 +29,18 @@ async function run() {
       if (posicao > 50000) break;
     }
 
-    if (!allCalls.length) { console.log('[contact_telefonia] Nenhum registro.'); return; }
+    if (!allCalls.length) { console.log('[raw_contact_telefonia] Nenhum registro.'); return; }
 
     const rows = allCalls.map(item => ({ external_id: String(item.id), payload: item }));
 
     const batchSize = 1000;
     for (let i = 0; i < rows.length; i += batchSize) {
-      const { error } = await supabase.from('contact_telefonia').upsert(rows.slice(i, i + batchSize), { onConflict: 'external_id' });
+      const { error } = await supabase.from('raw_contact_telefonia').upsert(rows.slice(i, i + batchSize), { onConflict: 'external_id' });
       if (error) throw error;
     }
-    console.log(`[contact_telefonia] ${rows.length} registros sincronizados.`);
+    console.log(`[raw_contact_telefonia] ${rows.length} registros sincronizados.`);
   } catch (err) {
-    console.error('[contact_telefonia] Erro:', err.response?.data || err.message);
+    console.error('[raw_contact_telefonia] Erro:', err.response?.data || err.message);
     process.exit(1);
   }
 }
