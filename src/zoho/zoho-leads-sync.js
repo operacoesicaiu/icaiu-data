@@ -29,10 +29,19 @@ async function runZohoLeadsSync({ days, label }) {
       const criteria = `(Data_e_hora_de_inicio_do_formul_rio >= "${formattedDate} 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "${formattedDate} 23:59:59")`;
       const url = `https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_LEADS_APP_NAME}/report/${ZOHO_LEADS_REPORT_NAME}`;
 
-      const resp = await axios.get(url, {
-        params: { from, limit, criteria },
-        headers: { Authorization: `Zoho-oauthtoken ${zohoToken}` }
-      });
+      let resp;
+      try {
+        resp = await axios.get(url, {
+          params: { from, limit, criteria },
+          headers: { Authorization: `Zoho-oauthtoken ${zohoToken}` }
+        });
+      } catch (e) {
+        if (e.response?.status === 404) {
+          console.log(`[raw_contact_site] ${formattedDate}: sem dados (404).`);
+          break;
+        }
+        throw e;
+      }
 
       const data = resp.data.data || [];
       if (!data.length) break;
