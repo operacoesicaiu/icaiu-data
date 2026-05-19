@@ -29,7 +29,11 @@ async function run() {
 
     if (!allClients.length) { console.log('[raw_contact_hablla] Nenhum cliente.'); return; }
 
-    const rows = allClients.map(item => ({ external_id: `client-${item.id}`, payload: item }));
+    const rowsMap = new Map();
+    for (const item of allClients) {
+      rowsMap.set(`client-${item.id}`, { external_id: `client-${item.id}`, payload: item });
+    }
+    const rows = Array.from(rowsMap.values());
 
     const { error } = await supabase.from('raw_contact_hablla').upsert(rows, { onConflict: 'external_id' });
     if (error) throw error;
