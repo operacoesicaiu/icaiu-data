@@ -2,8 +2,12 @@ name: SIGE Faturamento
 
 on:
   schedule:
-    - cron: '47 4 * * *'
+    - cron: '38 4 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: sige-faturamento
+  cancel-in-progress: false
 
 jobs:
   run:
@@ -15,6 +19,11 @@ jobs:
     steps:
 
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+        env:
+          GIT_TRACE: 0
+          GIT_CURL_VERBOSE: 0
 
       - uses: actions/setup-node@v4
         with:

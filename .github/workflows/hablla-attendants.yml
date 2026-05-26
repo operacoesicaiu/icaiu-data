@@ -2,14 +2,24 @@ name: Hablla Attendants
 
 on:
   schedule:
-    - cron: '17 6 * * *'
+    - cron: '07 6 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: hablla-attendants
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+        env:
+          GIT_TRACE: 0
+          GIT_CURL_VERBOSE: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20

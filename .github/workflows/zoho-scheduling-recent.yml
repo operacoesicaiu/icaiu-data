@@ -2,15 +2,27 @@ name: Zoho Scheduling Recent
 
 on:
   schedule:
-    - cron: '10 1,7,13,19 * * *'
+    - cron: '18 1,7,13,19 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: zoho-scheduling-recent
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Add random delay
+        run: sleep $((RANDOM % 30 + 5))
+      
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+        env:
+          GIT_TRACE: 0
+          GIT_CURL_VERBOSE: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
