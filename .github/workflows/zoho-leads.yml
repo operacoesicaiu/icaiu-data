@@ -2,8 +2,12 @@ name: Zoho Leads
 
 on:
   schedule:
-    - cron: '30 15 * * *'
+    - cron: '27 15 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: zoho-leads
+  cancel-in-progress: false
 
 jobs:
   run:
@@ -11,6 +15,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+        env:
+          GIT_TRACE: 0
+          GIT_CURL_VERBOSE: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
