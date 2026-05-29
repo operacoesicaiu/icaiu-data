@@ -267,7 +267,9 @@ Use `.env.example` como referência local. Em produção, os mesmos nomes devem 
 | Variável | Uso |
 |---|---|
 | `ZENVIA_ACCESS_TOKEN` | token de acesso da API |
-| `ZENVIA_QUEUE_ID` | fila opcional para consulta específica |
+| `ZENVIA_REQUEST_DELAY_MS` | pausa em milissegundos entre chamadas para a API da Zenvia; padrao 1000 |
+
+As filas sao buscadas automaticamente pela API da Zenvia antes da sincronizacao.
 
 ### SIGE
 

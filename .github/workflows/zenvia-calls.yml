@@ -36,4 +36,4 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
           ZENVIA_ACCESS_TOKEN: ${{ secrets.ZENVIA_ACCESS_TOKEN }}
-          ZENVIA_QUEUE_ID: ${{ secrets.ZENVIA_QUEUE_ID }}
+          ZENVIA_REQUEST_DELAY_MS: 1000
