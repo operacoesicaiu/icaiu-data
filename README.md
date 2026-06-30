@@ -1,5 +1,11 @@
 # ICAIU Data
 
+## Portfolio Case Study
+
+Full case study: https://pklavc.com/projects/raw-api-ingestion-pipeline/
+
+This repository is part of my backend and API integration portfolio. It demonstrates scheduled API ingestion, raw data preservation, GitHub Actions automation, Supabase storage, idempotent identifiers, and operational ETL boundaries.
+
 [![Node 20](https://img.shields.io/badge/node-20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![GitHub Actions](https://img.shields.io/badge/runtime-GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/operacoesicaiu/icaiu-data/actions)
 [![Supabase](https://img.shields.io/badge/storage-Supabase-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
