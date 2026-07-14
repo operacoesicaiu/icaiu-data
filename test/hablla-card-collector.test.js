@@ -36,22 +36,23 @@ function collect(hablla, overrides = {}) {
   });
 }
 
-test("cards ordenados param na primeira pagina inteiramente anterior ao cutoff", async () => {
+test("uma pagina sem created_at recente nao encerra a busca", async () => {
   const hablla = fakeHablla([
     [
-      card("recent-1", "2026-07-10T12:00:00.000Z"),
-      card("recent-2", "2026-07-08T12:00:00.000Z"),
+      card("old-1", "2026-07-10T12:00:00.000Z", "2026-06-01T12:00:00.000Z"),
+      card("old-2", "2026-07-09T12:00:00.000Z", "2026-06-02T12:00:00.000Z"),
     ],
     [
-      card("old-1", "2026-07-06T12:00:00.000Z"),
-      card("old-2", "2026-07-05T12:00:00.000Z"),
+      card("recent-1", "2026-07-08T12:00:00.000Z"),
+      card("recent-2", "2026-07-07T12:00:00.000Z"),
     ],
+    [],
   ]);
 
   const cards = await collect(hablla);
 
   assert.deepEqual(cards.map(({ id }) => id), ["recent-1", "recent-2"]);
-  assert.equal(hablla.calls.length, 2);
+  assert.equal(hablla.calls.length, 3);
   for (const { options, path } of hablla.calls) {
     assert.equal(path, "/v3/workspaces/workspace-test/cards");
     assert.equal(options.params.order, "updated_at");
@@ -60,7 +61,72 @@ test("cards ordenados param na primeira pagina inteiramente anterior ao cutoff",
   }
 });
 
-test("updated_at ordena a busca, mas somente created_at define a janela", async () => {
+test("duas paginas consecutivas sem created_at recente encerram a busca", async () => {
+  const hablla = fakeHablla([
+    [
+      card("recent-1", "2026-07-10T12:00:00.000Z"),
+      card("recent-2", "2026-07-09T12:00:00.000Z"),
+    ],
+    [
+      card("old-1", "2026-07-08T12:00:00.000Z", "2026-06-01T12:00:00.000Z"),
+      card("old-2", "2026-07-08T11:00:00.000Z", "2026-06-02T12:00:00.000Z"),
+    ],
+    [
+      card("old-3", "2026-07-08T10:00:00.000Z", "2026-06-03T12:00:00.000Z"),
+      card("old-4", "2026-07-08T09:00:00.000Z", "2026-06-04T12:00:00.000Z"),
+    ],
+    [
+      card("nao-deve-ser-lido-1", "2026-07-08T08:00:00.000Z"),
+      card("nao-deve-ser-lido-2", "2026-07-08T07:00:00.000Z"),
+    ],
+  ]);
+
+  const cards = await collect(hablla);
+
+  assert.deepEqual(cards.map(({ id }) => id), ["recent-1", "recent-2"]);
+  assert.equal(hablla.calls.length, 3);
+});
+
+test("pagina com created_at recente zera o contador consecutivo", async () => {
+  const hablla = fakeHablla([
+    [
+      card("old-1", "2026-07-12T12:00:00.000Z", "2026-06-01T12:00:00.000Z"),
+      card("old-2", "2026-07-12T11:00:00.000Z", "2026-06-02T12:00:00.000Z"),
+    ],
+    [
+      card("recent-1", "2026-07-12T10:00:00.000Z"),
+      card("recent-2", "2026-07-12T09:00:00.000Z"),
+    ],
+    [
+      card("old-3", "2026-07-12T08:00:00.000Z", "2026-06-03T12:00:00.000Z"),
+      card("old-4", "2026-07-12T07:00:00.000Z", "2026-06-04T12:00:00.000Z"),
+    ],
+    [
+      card("recent-3", "2026-07-12T06:00:00.000Z"),
+      card("recent-4", "2026-07-12T05:00:00.000Z"),
+    ],
+    [
+      card("old-5", "2026-07-12T04:00:00.000Z", "2026-06-05T12:00:00.000Z"),
+      card("old-6", "2026-07-12T03:00:00.000Z", "2026-06-06T12:00:00.000Z"),
+    ],
+    [
+      card("old-7", "2026-07-12T02:00:00.000Z", "2026-06-07T12:00:00.000Z"),
+      card("old-8", "2026-07-12T01:00:00.000Z", "2026-06-08T12:00:00.000Z"),
+    ],
+  ]);
+
+  const cards = await collect(hablla);
+
+  assert.equal(hablla.calls.length, 6);
+  assert.deepEqual(cards.map(({ id }) => id), [
+    "recent-1",
+    "recent-2",
+    "recent-3",
+    "recent-4",
+  ]);
+});
+
+test("updated_at pagina a API, mas somente created_at define a janela", async () => {
   const hablla = fakeHablla([
     [
       card(
@@ -74,62 +140,13 @@ test("updated_at ordena a busca, mas somente created_at define a janela", async 
         "2026-07-08T12:00:00.000Z",
       ),
     ],
-    [
-      card("old-1", "2026-07-06T12:00:00.000Z"),
-      card("old-2", "2026-07-05T12:00:00.000Z"),
-    ],
+    [card("old-1", "2026-07-08T12:00:00.000Z", "2026-06-02T12:00:00.000Z")],
   ]);
 
   const cards = await collect(hablla);
 
   assert.deepEqual(cards.map(({ id }) => id), ["new-card"]);
   assert.equal(hablla.calls.length, 2);
-});
-
-test("desordem entre paginas desativa early-stop ate pagina curta", async () => {
-  const hablla = fakeHablla([
-    [
-      card("recent-1", "2026-07-10T00:00:00.000Z"),
-      card("recent-2", "2026-07-08T00:00:00.000Z"),
-    ],
-    [
-      card("recent-3", "2026-07-09T00:00:00.000Z"),
-      card("old-1", "2026-07-06T00:00:00.000Z"),
-    ],
-    [
-      card("old-2", "2026-07-05T00:00:00.000Z"),
-      card("old-3", "2026-07-04T00:00:00.000Z"),
-    ],
-    [card("old-4", "2026-07-03T00:00:00.000Z")],
-  ]);
-
-  const cards = await collect(hablla);
-
-  assert.equal(hablla.calls.length, 4);
-  assert.deepEqual(cards.map(({ id }) => id), [
-    "recent-1",
-    "recent-2",
-    "recent-3",
-  ]);
-});
-
-test("desordem dentro de pagina antiga tambem desativa early-stop", async () => {
-  const hablla = fakeHablla([
-    [
-      card("recent-1", "2026-07-10T00:00:00.000Z"),
-      card("recent-2", "2026-07-09T00:00:00.000Z"),
-    ],
-    [
-      card("old-1", "2026-07-05T00:00:00.000Z"),
-      card("old-2", "2026-07-06T00:00:00.000Z"),
-    ],
-    [card("old-3", "2026-07-04T00:00:00.000Z")],
-  ]);
-
-  const cards = await collect(hablla);
-
-  assert.equal(hablla.calls.length, 3);
-  assert.deepEqual(cards.map(({ id }) => id), ["recent-1", "recent-2"]);
 });
 
 test("cards exigem id, created_at e updated_at coerentes", async () => {
@@ -189,4 +206,5 @@ test("fallback desordenado respeita o teto de paginas", async () => {
 
 test("limite padrao permanece em 2000 paginas", () => {
   assert.equal(collectHabllaCards.DEFAULT_MAX_PAGES, 2000);
+  assert.equal(collectHabllaCards.DEFAULT_PAGES_WITHOUT_RECENT_CREATED, 2);
 });

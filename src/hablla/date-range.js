@@ -86,4 +86,3 @@ function saoPauloDayRange(daysAgo, now = new Date()) {
 }
 
 module.exports = saoPauloDayRange;
-module.exports._internals = { dateKey, shiftDateKey, startOfDate };

@@ -163,26 +163,24 @@ Strings são gravadas como texto literal, sem apóstrofo visível e sem permitir
 
 ## Paginação eficiente do Hablla
 
-Cards são solicitados com `order=updated_at`, `direction=desc` e corte temporal. A janela de negócio usa **`created_at`**, preservando o comportamento histórico. A data `updated_at` ordena a busca e permite provar quando as páginas seguintes já não podem conter um card criado dentro do prazo.
+Cards são solicitados com `order=updated_at`, `direction=desc` e corte temporal. A janela de negócio usa **`created_at`**, preservando o comportamento histórico. A data `updated_at` pagina a API; somente `created_at` decide quais cards entram na janela.
 
 ```mermaid
 flowchart TD
     P[Buscar página de 50 cards] --> V{Resposta, IDs, created_at<br/>e updated_at válidos?}
     V -- não --> F[Falhar sem gravar]
-    V -- sim --> O{Ordem updated_at continua decrescente?}
-    O -- não --> FS[Desativar corte antecipado e fazer varredura completa segura]
-    O -- sim --> C{Página inteira anterior ao corte?}
-    C -- sim --> E[Encerrar paginação]
-    C -- não --> N{Página curta ou vazia?}
+    V -- sim --> C{Há created_at dentro da janela?}
+    C -- sim --> Z[Zerar contador sem recentes]
+    C -- não --> I[Incrementar contador]
+    Z --> N{Página curta ou vazia?}
+    I --> D{Duas páginas consecutivas?}
+    D -- sim --> E[Encerrar paginação]
+    D -- não --> N
     N -- sim --> E
     N -- não --> P
-    FS --> L{Página curta ou vazia antes do teto?}
-    L -- não --> P2[Continuar varredura]
-    P2 --> L
-    L -- sim --> E
 ```
 
-O worker histórico da iCaiu parava na primeira página sem criações recentes depois das duas páginas iniciais. O coletor atual não depende desse número heurístico: inclui somente `created_at` dentro da janela, deduplica por ID preservando a versão com `updated_at` mais recente e encerra cedo apenas enquanto confirma ordem decrescente. Também detecta página repetida e interrompe com erro se atingir `HABLLA_CARDS_MAX_PAGES`; o teto nunca é interpretado como coleta completa.
+O coletor restaura a regra histórica mais conservadora: encerra após **duas páginas consecutivas** sem criações recentes e zera o contador ao encontrar uma. Ele deduplica por ID preservando a versão com `updated_at` mais recente, detecta página repetida e falha se atingir `HABLLA_CARDS_MAX_PAGES`; o teto nunca é interpretado como coleta completa.
 
 ## Resiliência e idempotência
 
@@ -264,7 +262,7 @@ Discord e Healthchecks são opcionais para a execução dos coletores, mas neces
 
 ### GitHub Variables e ajustes de execução
 
-Os workflows Hablla Cards leem as GitHub Variables `HABLLA_CARDS_DAYS` e `HABLLA_CARDS_MAX_PAGES`. Na ausência delas, o código aplica os padrões documentados em `.env.example`.
+Os workflows Hablla leem as GitHub Variables `HABLLA_CARDS_DAYS`, `HABLLA_CARDS_MAX_PAGES` e `HABLLA_CARDS_PAGES_WITHOUT_RECENT_CREATED`. Na ausência delas, o código aplica os padrões documentados em `.env.example`.
 
 Outros controles reconhecidos localmente incluem:
 

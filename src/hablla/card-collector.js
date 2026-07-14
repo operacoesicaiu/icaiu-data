@@ -2,6 +2,7 @@ const { extractCards } = require("./response-contracts");
 
 const DEFAULT_MAX_PAGES = 2000;
 const DEFAULT_PAGE_SIZE = 50;
+const DEFAULT_PAGES_WITHOUT_RECENT_CREATED = 2;
 
 function positiveInteger(value, fallback, name) {
   const selected = value === undefined || value === null || value === ""
@@ -86,6 +87,8 @@ async function collectHabllaCards({
   cutoff,
   maxPages = process.env.HABLLA_CARDS_MAX_PAGES,
   pageSize = DEFAULT_PAGE_SIZE,
+  pagesWithoutRecentCreated =
+    process.env.HABLLA_CARDS_PAGES_WITHOUT_RECENT_CREATED,
 }) {
   if (!hablla || typeof hablla.get !== "function") {
     throw new Error("Cliente Hablla invalido");
@@ -105,10 +108,14 @@ async function collectHabllaCards({
     DEFAULT_PAGE_SIZE,
     "pageSize",
   );
+  const safePagesWithoutRecentCreated = positiveInteger(
+    pagesWithoutRecentCreated,
+    DEFAULT_PAGES_WITHOUT_RECENT_CREATED,
+    "HABLLA_CARDS_PAGES_WITHOUT_RECENT_CREATED",
+  );
   const cardsById = new Map();
   const pageFingerprints = new Set();
-  let descendingOrder = true;
-  let previousTimestamp = null;
+  let consecutivePagesWithoutRecentCreated = 0;
   let completed = false;
 
   for (let page = 1; page <= safeMaxPages; page++) {
@@ -148,18 +155,11 @@ async function collectHabllaCards({
     }
     pageFingerprints.add(fingerprint);
 
+    const pageHasRecentCreated = validatedCards.some(
+      ({ createdAt }) => createdAt >= cutoffTimestamp,
+    );
     for (const item of validatedCards) {
-      if (
-        previousTimestamp !== null &&
-        item.updatedAt > previousTimestamp
-      ) {
-        descendingOrder = false;
-      }
-      previousTimestamp = item.updatedAt;
-
-      // A janela de negocio sempre foi definida por created_at. updated_at e
-      // usado apenas para ordenar e provar quando as paginas seguintes ja nao
-      // podem conter um card criado dentro da janela.
+      // A API pagina por updated_at, mas a janela de negocio e created_at.
       if (item.createdAt >= cutoffTimestamp) {
         const existing = cardsById.get(item.id);
         if (!existing || item.updatedAt > existing.updatedAt) {
@@ -168,10 +168,13 @@ async function collectHabllaCards({
       }
     }
 
-    const pageIsEntirelyBeforeCutoff = validatedCards.every(
-      ({ updatedAt }) => updatedAt < cutoffTimestamp,
-    );
-    if (descendingOrder && pageIsEntirelyBeforeCutoff) {
+    consecutivePagesWithoutRecentCreated = pageHasRecentCreated
+      ? 0
+      : consecutivePagesWithoutRecentCreated + 1;
+    if (
+      consecutivePagesWithoutRecentCreated >=
+      safePagesWithoutRecentCreated
+    ) {
       completed = true;
       break;
     }
@@ -192,3 +195,5 @@ async function collectHabllaCards({
 
 module.exports = collectHabllaCards;
 module.exports.DEFAULT_MAX_PAGES = DEFAULT_MAX_PAGES;
+module.exports.DEFAULT_PAGES_WITHOUT_RECENT_CREATED =
+  DEFAULT_PAGES_WITHOUT_RECENT_CREATED;

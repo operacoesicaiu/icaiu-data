@@ -196,9 +196,3 @@ function getHabllaClient() {
 }
 
 module.exports = getHabllaClient;
-module.exports._internals = {
-  authorizationFor,
-  isRetryable,
-  jwtExpiresAt,
-  publicError,
-};
