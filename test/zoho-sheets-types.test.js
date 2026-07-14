@@ -67,6 +67,12 @@ test("Zoho Scheduling aplica apenas os tipos históricos nas colunas previstas",
   assert.equal(typed[22], 0);
 });
 
+test("Zoho Scheduling remove somente o sinal de mais inicial do telefone", () => {
+  assert.equal(scheduling.normalizeSchedulingPhone("+5511999999999"), "5511999999999");
+  assert.equal(scheduling.normalizeSchedulingPhone("5511999999999"), "5511999999999");
+  assert.equal(scheduling.normalizeSchedulingPhone("11+22"), "11+22");
+});
+
 test("Zoho Leads preserva primitivos e converte somente CPF, CEP, R e W", () => {
   assert.equal(leads.extractValue(42), 42);
   assert.equal(leads.extractValue(false), false);

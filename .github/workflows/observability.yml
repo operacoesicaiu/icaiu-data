@@ -16,6 +16,7 @@ on:
       - Zoho Leads
       - Zoho Scheduling Recent
       - Zoho Scheduling
+      - Zoho Scheduling Sheets
       - Repository Heartbeat
     types: [completed]
   workflow_dispatch:

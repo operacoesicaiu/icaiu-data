@@ -82,6 +82,11 @@ function applySchedulingTypes(row) {
   return typed;
 }
 
+function normalizeSchedulingPhone(value) {
+  const phone = String(value ?? "");
+  return phone.startsWith("+") ? phone.slice(1) : phone;
+}
+
 async function run() {
   try {
     const {
@@ -173,7 +178,7 @@ async function run() {
     const finalData = zohoRecords.map((record) => {
       const row = mapping.map((field) => formatZohoValue(record[field]));
       let [A, B, C, D, E, F, G, , , , , , M, N, O] = row;
-      if (A.startsWith("+")) A = A.slice(1);
+      A = normalizeSchedulingPhone(A);
       if (F && F.includes(":") && !F.includes("-") && !F.includes("/")) {
         const datePart = (E || "").split(" ")[0];
         if (datePart) F = `${datePart} ${F}`;
@@ -235,6 +240,7 @@ async function run() {
 }
 
 run.applySchedulingTypes = applySchedulingTypes;
+run.normalizeSchedulingPhone = normalizeSchedulingPhone;
 module.exports = run;
 
 if (require.main === module) {

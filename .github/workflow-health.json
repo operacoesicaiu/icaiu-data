@@ -12,6 +12,7 @@
     { "file": "zoho-leads.yml", "name": "Zoho Leads", "maxAgeHours": 36 },
     { "file": "zoho-scheduling-recent.yml", "name": "Zoho Scheduling Recent", "maxAgeHours": 11 },
     { "file": "zoho-scheduling.yml", "name": "Zoho Scheduling", "maxAgeHours": 36 },
+    { "file": "zoho-scheduling-sheets.yml", "name": "Zoho Scheduling Sheets", "maxAgeHours": 12 },
     { "file": "repository-heartbeat.yml", "name": "Repository Heartbeat", "maxAgeHours": 144 }
   ]
 }

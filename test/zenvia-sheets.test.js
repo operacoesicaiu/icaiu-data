@@ -56,6 +56,16 @@ test("Zenvia preserva duracao HH:mm:ss como celula TIME historica", () => {
       },
     },
   );
+  assert.deepEqual(
+    GoogleSheets.literalCell(runIntegration.durationSheetValue("0")),
+    {
+      userEnteredValue: { numberValue: 0 },
+      userEnteredFormat: {
+        numberFormat: { type: "TIME", pattern: "hh:mm:ss" },
+      },
+    },
+  );
+  assert.equal(runIntegration.durationSheetValue("0.25"), 0.25);
   assert.throws(
     () => runIntegration.durationSheetValue("indisponivel"),
     /formato inesperado/,

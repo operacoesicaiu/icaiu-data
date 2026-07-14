@@ -117,14 +117,14 @@ Os crons de dados sem `timezone` são interpretados em **UTC** pelo GitHub Actio
 | Zoho | Supabase `raw_contact_site` | Zoho Leads | `27 16 * * *` | 13:27 |
 | Zoho | Supabase `raw_events_agendamento` | Zoho Scheduling Recent | `18 1,7,13,19 * * *` | 22:18¹, 04:18, 10:18 e 16:18 |
 | Zoho | Supabase `raw_events_agendamento` | Zoho Scheduling | `05 15 * * *` | 12:05 |
-| Zoho | Google Sheets, aba configurada | Zoho Scheduling Sheets | manual | `workflow_dispatch` |
+| Zoho | Google Sheets, aba configurada | Zoho Scheduling Sheets | `47 2,8,14,20 * * *` | 23:47¹, 05:47, 11:47 e 17:47 |
 
 ¹ O horário BRT pertence ao dia civil anterior à ocorrência UTC correspondente.
 
 As rotinas “Recent” mantêm as mudanças frequentes com baixa latência; as rotinas diárias completas funcionam como reconciliação. Os respectivos `upsert`s usam a mesma chave externa, portanto uma nova coleta atualiza o registro em vez de criar outra cópia. No relatório de atendentes Hablla, a chave opaca combina dia, setor, usuário e conexão; após o `upsert`, IDs legados ou obsoletos da janela são removidos com segurança.
 
-> [!WARNING]
-> **Zoho Scheduling Sheets não é agendado.** Ele exige `ZOHO_SCHEDULING_SPREADSHEET_ID` e `ZOHO_SCHEDULING_SHEET_NAME`, além das demais credenciais Zoho/Google, e deve ser iniciado manualmente. Sua configuração não deve ser considerada validada até uma execução verde ser comparada com a planilha antes e depois.
+> [!NOTE]
+> **Zoho Scheduling Sheets foi validado em produção e roda quatro vezes ao dia.** O disparo manual continua disponível para recuperação controlada; antes de um rerun, confirme o destino e compare a planilha antes e depois.
 
 ## Atualização segura das planilhas
 
@@ -226,6 +226,7 @@ O sistema possui quatro sinais complementares:
 | SIGE Faturamento / Zenvia Calls | 36 h |
 | Zoho Leads Recent / Scheduling Recent | 11 h |
 | Zoho Leads / Scheduling | 36 h |
+| Zoho Scheduling Sheets | 12 h |
 | Repository Heartbeat | 144 h |
 
 O GitHub ainda pode enviar notificações por e-mail ou web. Para usar esse canal como redundância, habilite notificações de GitHub Actions — preferencialmente somente falhas — na conta responsável pelas agendas.
@@ -346,4 +347,4 @@ A suíte automatizada cobre contratos de resposta, paginação, retries, autenti
 5. Execute manualmente apenas o workflow necessário e confirme `success` no próprio Actions.
 6. Se a execução ficar verde mas o watchdog continuar vermelho, aguarde a próxima verificação ou execute `Observability` manualmente.
 
-Para `Zoho Scheduling Sheets`, além do workflow verde, confirme explicitamente que `ZOHO_SCHEDULING_SPREADSHEET_ID` e `ZOHO_SCHEDULING_SHEET_NAME` apontam para a base correta da iCaiu.
+Para um rerun manual de `Zoho Scheduling Sheets`, confirme explicitamente que `ZOHO_SCHEDULING_SPREADSHEET_ID` e `ZOHO_SCHEDULING_SHEET_NAME` apontam para a base correta da iCaiu.

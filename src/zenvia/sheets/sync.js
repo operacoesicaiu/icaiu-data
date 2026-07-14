@@ -126,7 +126,10 @@ function durationSheetValue(value) {
     return GoogleSheets.timeCell(normalized, { pattern: "hh:mm:ss" });
   }
   if (/^-?\d+(?:[.,]\d+)?$/.test(text)) {
-    return numericSheetValue(text);
+    const number = numericSheetValue(text);
+    return number === 0
+      ? GoogleSheets.timeCell("00:00:00", { pattern: "hh:mm:ss" })
+      : number;
   }
   throw new Error("Duracao Zenvia em formato inesperado");
 }
