@@ -15,7 +15,9 @@ function formatPublicError(error) {
     parts.push(`code=${oneLine(error.code)}`);
   }
 
-  if (error.message) {
+  // Third-party HTTP/database messages may echo URLs, query values or payloads.
+  // Only include messages created locally (plain Error without provider metadata).
+  if (error.message && !error.isAxiosError && !error.response && !error.code) {
     parts.push(`message=${oneLine(error.message)}`);
   }
 

@@ -1,525 +1,349 @@
-# ICAIU Data
+# iCaiu Data
 
-## Portfolio Case Study
+[![Tests](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/tests.yml/badge.svg)](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/tests.yml)
+[![Sheets Sync](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/sheets-sync.yml/badge.svg)](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/sheets-sync.yml)
+[![Observability](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/observability.yml/badge.svg)](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/observability.yml)
 
-Full case study: https://pklavc.com/projects/raw-api-ingestion-pipeline/
+Repositório central das automações de dados da **iCaiu**. Ele coleta dados de Hablla, SIGE, Zenvia e Zoho, atualiza bases no Google Sheets e mantém as tabelas `raw_` do Supabase.
 
-This repository is part of my backend and API integration portfolio. It demonstrates scheduled API ingestion, raw data preservation, GitHub Actions automation, Supabase storage, idempotent identifiers, and operational ETL boundaries.
-
-[![Node 20](https://img.shields.io/badge/node-20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![GitHub Actions](https://img.shields.io/badge/runtime-GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/operacoesicaiu/icaiu-data/actions)
-[![Supabase](https://img.shields.io/badge/storage-Supabase-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
-[![Hablla Cards Workflow](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/hablla-cards.yml/badge.svg)](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/hablla-cards.yml)
-[![Zoho Scheduling Workflow](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/zoho-scheduling.yml/badge.svg)](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/zoho-scheduling.yml)
-[![Zenvia Workflow](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/zenvia-calls.yml/badge.svg)](https://github.com/operacoesicaiu/icaiu-data/actions/workflows/zenvia-calls.yml)
-
-Coletor de dados brutos de integrações externas para o Supabase.
-
-O projeto roda chamadas para APIs de terceiros, transforma apenas o envelope de armazenamento e grava o retorno bruto em tabelas `raw_*` no Supabase.
-
-## Objetivo
-
-Este repositório existe para resolver um problema específico:
-
-- buscar dados em APIs externas de forma programada
-- persistir esses dados em uma camada raw confiável
-- desacoplar a coleta da camada analítica ou operacional
-- manter histórico reprocessável sem depender de servidores sempre ligados
-
-Em outras palavras, este projeto e a etapa de ingestão. Modelagem, joins, enriquecimento, dashboards e regras derivadas devem acontecer depois, fora da camada raw.
-
-## Princípios da arquitetura
-
-1. O `payload` salvo no banco deve continuar bruto.
-2. O que pode variar e o envelope de ingestão: `external_id`, tabela de destino, janelas de coleta, logs e agendamento.
-3. A tabela raw e um espelho operacional da API, não uma camada de negócio.
-4. Dados públicos de execução podem aparecer em logs, mas segredos e respostas completas de erro não.
+> [!IMPORTANT]
+> Este repositório pertence exclusivamente à iCaiu. Credenciais, planilhas, tabelas e dados da Loja do Sapo não são lidos, gravados nem compartilhados por estas automações.
 
 ## Visão geral
 
 ```mermaid
 flowchart LR
-    GA[GitHub Actions ou execução local] --> API1[Hablla API]
-    GA --> API2[Zoho Creator API]
-    GA --> API3[Zenvia Voice API]
-    GA --> API4[SIGE API]
-    API1 --> APP[Workers Node.js]
-    API2 --> APP
-    API3 --> APP
-    API4 --> APP
-    APP --> SB[(Supabase raw_*)]
-    SB --> DER[Camadas derivadas / analytics / BI]
+    subgraph ORIGENS["APIs da iCaiu"]
+        H[Hablla]
+        S[SIGE]
+        Z[Zenvia]
+        C[Zoho Creator]
+    end
+
+    subgraph REPO["operacoesicaiu/icaiu-data"]
+        A[GitHub Actions]
+        G[Autenticação Google compartilhada]
+        SS[Sincronizadores de planilhas]
+        DB[Coletores Supabase]
+        R[Retries, limites e contratos]
+    end
+
+    GS[(Google Sheets)]
+    SB[(Supabase raw)]
+
+    A --> G --> SS --> GS
+    A --> DB --> SB
+    H --> SS
+    S --> SS
+    Z --> SS
+    C --> SS
+    H --> DB
+    S --> DB
+    Z --> DB
+    C --> DB
+    R -. protege .-> SS
+    R -. protege .-> DB
 ```
 
-## Estrutura do projeto
+O workflow central de planilhas obtém **um token Google** e o compartilha com os sincronizadores executados naquela rodada. Se o token expirar, o cliente renova a autenticação quando recebe `401`; os provedores não iniciam nem encadeiam o autenticador Google por conta própria.
+
+As duas saídas têm responsabilidades diferentes:
+
+- **Google Sheets:** bases operacionais, atualizadas por substituição seletiva de janelas ou identificadores;
+- **Supabase:** camada bruta e idempotente, atualizada por `upsert` em `external_id`.
+
+Na camada `raw_`, o campo `payload` preserva o objeto devolvido pelo provedor. Relacionamentos, renomeações, enriquecimentos e outras transformações pertencem a uma camada derivada e não devem alterar o payload original.
+
+## Organização
+
+Os nomes dos arquivos usam o contexto das pastas; por isso `hablla/sheets/sync.js` não repete “hablla” no nome.
 
 ```text
-.
-├── .github/workflows/     # execuções agendadas e manuais no GitHub Actions
-
+icaiu-data/
+├── .github/
+│   ├── workflow-health.json       # prazos máximos esperados por automação
+│   └── workflows/                 # agenda, testes, heartbeat e observabilidade
+├── ops/
+│   └── heartbeat.txt              # atividade automática do repositório
+├── scripts/
+│   └── health.js                  # watchdog e alertas
 ├── src/
-│   ├── hablla/           # integrações Hablla
-│   ├── zoho/             # integrações Zoho
-│   ├── zenvia/           # integração Zenvia
-│   ├── sige/             # integração SIGE
-│   └── lib/              # utilitários compartilhados
-├── run-local.js          # runner local simples
-└── .env.example          # referência das variáveis de ambiente
+│   ├── google/
+│   │   ├── auth.js                # service account e renovação do token
+│   │   └── sheets.js              # leitura, escrita e validação do Sheets
+│   ├── sheets/
+│   │   └── run.js                 # uma autenticação, vários sincronizadores
+│   ├── hablla/
+│   │   ├── api.js
+│   │   ├── attendant-rows.js      # identidade composta e reconciliação
+│   │   ├── card-collector.js
+│   │   ├── date-range.js
+│   │   ├── response-contracts.js
+│   │   ├── sheets/sync.js
+│   │   └── supabase/{cards,clients,attendants}.js
+│   ├── sige/
+│   │   ├── api.js
+│   │   ├── sheets/sync.js
+│   │   └── supabase/faturamento.js
+│   ├── zenvia/
+│   │   ├── response.js
+│   │   ├── sheets/sync.js
+│   │   └── supabase/calls.js
+│   ├── zoho/
+│   │   ├── api.js
+│   │   ├── oauth.js
+│   │   ├── response.js
+│   │   ├── sheets/{leads,scheduling}.js
+│   │   └── supabase/              # leads e agendamentos, completos e recentes
+│   └── lib/                        # HTTP, datas BRT, paginação, erros e upsert
+├── test/                           # contratos, resiliência e integridade
+├── run-local.js
+└── supabase/schema.sql
 ```
 
-## Por que GitHub Actions chamando a API e depois enviando ao Supabase
+## Destinos e agendamentos
 
-Para este caso, GitHub Actions + Supabase é uma escolha melhor do que manter um servidor próprio ou um worker 24/7.
+Os crons de dados sem `timezone` são interpretados em **UTC** pelo GitHub Actions. A coluna BRT usa `America/Sao_Paulo` (`UTC−03:00`). Horários quebrados reduzem a concentração de execuções nos minutos mais disputados; o GitHub ainda pode iniciar uma agenda alguns minutos depois do horário nominal.
 
-### Benefícios práticos
+| Provedor | Destino | Workflow | Cron UTC | Horário BRT |
+|---|---|---|---:|---:|
+| Hablla | Supabase `raw_events_hablla` | Hablla Cards | `13 3,9,15,21 * * *` | 00:13, 06:13, 12:13 e 18:13 |
+| Hablla | Supabase `raw_contact_hablla` | Hablla Clients | `02 3,9,15,21 * * *` | 00:02, 06:02, 12:02 e 18:02 |
+| Hablla | Supabase `raw_cs_avaliacao_atendimento` | Hablla Attendants | `07 7 * * *` | 04:07 |
+| SIGE | Supabase `raw_events_faturado` | SIGE Faturamento | `38 4 * * *` | 01:38 |
+| Zenvia | Supabase `raw_contact_telefonia` | Zenvia Calls | `23 4 * * *` | 01:23 |
+| Hablla, SIGE, Zenvia e Zoho Leads | Sheets: `Base Hablla Card`, `Base Atendente`, `Base Cliente` quando existir, `Faturamento` e abas configuradas | Sheets Sync | `37 5,11,17,23 * * *` | 02:37, 08:37, 14:37 e 20:37 |
+| Zoho | Supabase `raw_contact_site` | Zoho Leads Recent | `13 2,8,14,20 * * *` | 23:13¹, 05:13, 11:13 e 17:13 |
+| Zoho | Supabase `raw_contact_site` | Zoho Leads | `27 16 * * *` | 13:27 |
+| Zoho | Supabase `raw_events_agendamento` | Zoho Scheduling Recent | `18 1,7,13,19 * * *` | 22:18¹, 04:18, 10:18 e 16:18 |
+| Zoho | Supabase `raw_events_agendamento` | Zoho Scheduling | `05 15 * * *` | 12:05 |
+| Zoho | Google Sheets, aba configurada | Zoho Scheduling Sheets | manual | `workflow_dispatch` |
 
-- custo operacional baixo para um pipeline de ingestão leve
-- sem necessidade de manter VM, container ou servidor permanente
-- credenciais centralizadas em GitHub Secrets
-- execuções reproduzíveis e auditáveis por workflow
-- fácil reprocessamento manual via `workflow_dispatch`
-- Supabase funciona como armazenamento confiável e simples para a camada raw
+¹ O horário BRT pertence ao dia civil anterior à ocorrência UTC correspondente.
 
-### Por que não gravar direto em uma camada modelada
+As rotinas “Recent” mantêm as mudanças frequentes com baixa latência; as rotinas diárias completas funcionam como reconciliação. Os respectivos `upsert`s usam a mesma chave externa, portanto uma nova coleta atualiza o registro em vez de criar outra cópia. No relatório de atendentes Hablla, a chave opaca combina dia, setor, usuário e conexão; após o `upsert`, IDs legados ou obsoletos da janela são removidos com segurança.
 
-- a API pode mudar sem aviso
-- modelos de negócio mudam com frequência
-- manter o bruto permite reprocessar sem nova coleta externa
-- joins e enriquecimentos podem ser refeitos depois com mais segurança
+> [!WARNING]
+> **Zoho Scheduling Sheets não é agendado.** Ele exige `ZOHO_SCHEDULING_SPREADSHEET_ID` e `ZOHO_SCHEDULING_SHEET_NAME`, além das demais credenciais Zoho/Google, e deve ser iniciado manualmente. Sua configuração não deve ser considerada validada até uma execução verde ser comparada com a planilha antes e depois.
 
-### Limites e comportamento do GitHub Actions
+## Atualização segura das planilhas
 
-Em repositórios públicos, o uso de runners hospedados padrão do GitHub normalmente é viável sem a pressão de cobrança por minutos que existe em muitos cenários privados, mas ainda existem limitações operacionais relevantes:
-
-- cada job em runner hospedado pelo GitHub tem limite de até 6 horas
-- workflows agendados por `cron` podem atrasar alguns minutos
-- a granularidade mínima do `schedule` e de 5 minutos
-- execuções simultâneas demais aumentam risco de fila, sobreposição e rate limit nas APIs externas
-
-Por isso a estratégia adotada aqui é:
-
-- rodar cargas pequenas com mais frequência
-- rodar cargas maiores poucas vezes por dia
-- escalonar horários para evitar concorrência desnecessária
-
-## Integrações atuais
-
-### Hablla Clients
-
-- Arquivo: `src/hablla/hablla-clients.js`
-- Fonte: endpoint de `persons`
-- Destino: `raw_contact_hablla`
-- Janela: últimos 5 dias, incluindo hoje
-- Identificador externo: `client-{id}`
-- Objetivo: persistir os contatos/clientes brutos da Hablla
-
-### Hablla Cards
-
-- Arquivo: `src/hablla/hablla-cards.js`
-- Fonte: endpoint de `cards`
-- Destino: `raw_events_hablla`
-- Janela: ultimos 7 dias por padrao (`HABLLA_CARDS_DAYS`)
-- Identificador externo: `card-{id}`
-- Objetivo: persistir os cards brutos do board configurado
-
-### Hablla Attendants
-
-- Arquivo: `src/hablla/hablla-attendants.js`
-- Fonte: relatório `services/summary`
-- Destino: `raw_cs_avaliacao_atendimento`
-- Janela: últimos 5 dias
-- Estratégia de coleta: chamada diária, um dia por vez
-- Identificador externo: `attendant-{YYYY-MM-DD}-{id}`
-- Objetivo: evitar agregação indevida por período na API de summary
-
-### Zenvia Calls
-
-- Arquivo: `src/zenvia/zenvia-calls.js`
-- Fonte: relatório de chamadas ou fila
-- Destino: `raw_contact_telefonia`
-- Janela: últimos 5 dias
-- Identificador externo: `id` da chamada
-- Observação: operacionalmente a fonte costuma fazer mais sentido em execução diária, porque o dado útil geralmente fecha no dia anterior
-
-### SIGE Faturamento
-
-- Arquivo: `src/sige/sige-faturamento.js`
-- Fonte: pedidos com status `Pedido Faturado`
-- Destino: `raw_events_faturado`
-- Janela: últimos 5 dias
-- Estratégia de coleta: dia a dia
-- Identificador externo: `pedido-{Codigo}`
-
-### Zoho Leads Full
-
-- Arquivo: `src/zoho/zoho-leads.js`
-- Helper: `src/zoho/zoho-leads-sync.js`
-- Destino: `raw_contact_site`
-- Janela: últimos 15 dias
-- Estratégia: dia a dia para evitar paginação excessiva e facilitar reprocessamento
-- Identificador externo: `lead-{ID}`
-
-### Zoho Leads Recent
-
-- Arquivo: `src/zoho/zoho-leads-recent.js`
-- Helper: `src/zoho/zoho-leads-sync.js`
-- Destino: `raw_contact_site`
-- Janela: últimos 7 dias
-- Objetivo: atualização mais frequente da janela recente
-
-### Zoho Scheduling Full
-
-- Arquivo: `src/zoho/zoho-scheduling.js`
-- Helper: `src/zoho/zoho-scheduling-sync.js`
-- Destino: `raw_events_agendamento`
-- Janela: mês atual + mês anterior
-- Identificador externo: `agendamento-{ID}`
-
-### Zoho Scheduling Recent
-
-- Arquivo: `src/zoho/zoho-scheduling-recent.js`
-- Helper: `src/zoho/zoho-scheduling-sync.js`
-- Destino: `raw_events_agendamento`
-- Janela: últimos 7 dias
-- Objetivo: atualização frequente sem rerodar a carga maior o tempo todo
-
-## Relacionamento importante na Hablla
-
-Existe um vínculo útil entre cards e contatos:
-
-- `payload.persons` no card contém ids de `persons`
-- cada id pode ser resolvido em `/persons/{id}`
-- os telefones do contato ficam em `phones`
-
-Esse relacionamento é útil para camada derivada, mas não deve ser usado para alterar o `payload` raw salvo nas tabelas raw da Hablla.
-
-Detalhes adicionais estão em `src/hablla/README.md`.
-
-## Agendamentos atuais
-
-Todos os workflows também aceitam execução manual via `workflow_dispatch`.
-
-### Horários em UTC
-
-| Workflow | Arquivo | Cron UTC | Frequência | Script |
-|---|---|---|---|---|
-| Hablla Attendants | `.github/workflows/hablla-attendants.yml` | `17 6 * * *` | 1x por dia | `node src/hablla/hablla-attendants.js` |
-| Hablla Clients | `.github/workflows/hablla-clients.yml` | `5 3,9,15,21 * * *` | 4x por dia | `node src/hablla/hablla-clients.js` |
-| Hablla Cards | `.github/workflows/hablla-cards.yml` | `10 3,9,15,21 * * *` | 4x por dia | `node src/hablla/hablla-cards.js` |
-| Zenvia Calls | `.github/workflows/zenvia-calls.yml` | `17 4 * * *` | 1x por dia | `node src/zenvia/zenvia-calls.js` |
-| SIGE Faturamento | `.github/workflows/sige-faturamento.yml` | `47 4 * * *` | 1x por dia | `node src/sige/sige-faturamento.js` |
-| Zoho Scheduling Full | `.github/workflows/zoho-scheduling.yml` | `0 15 * * *` | 1x por dia | `node src/zoho/zoho-scheduling.js` |
-| Zoho Leads Full | `.github/workflows/zoho-leads.yml` | `30 15 * * *` | 1x por dia | `node src/zoho/zoho-leads.js` |
-| Zoho Scheduling Recent | `.github/workflows/zoho-scheduling-recent.yml` | `10 1,7,13,19 * * *` | 4x por dia | `node src/zoho/zoho-scheduling-recent.js` |
-| Zoho Leads Recent | `.github/workflows/zoho-leads-recent.yml` | `40 1,7,13,19 * * *` | 4x por dia | `node src/zoho/zoho-leads-recent.js` |
-
-### Leitura rápida em horário de Brasília
-
-Considerando UTC-3:
-
-- Hablla Clients: 00:05, 06:05, 12:05, 18:05
-- Hablla Cards: 00:10, 06:10, 12:10, 18:10
-- Zenvia: 01:17
-- SIGE: 01:47
-- Hablla Attendants: 03:17
-- Zoho Scheduling Full: 12:00
-- Zoho Leads Full: 12:30
-- Zoho Scheduling Recent: 22:10, 04:10, 10:10, 16:10
-- Zoho Leads Recent: 22:40, 04:40, 10:40, 16:40
-
-## Segurança e logs
-
-Como o repositório e os workflows podem ter execução pública, os scripts ativos foram ajustados para evitar dumping de respostas completas de erro.
-
-Hoje os logs de erro são sanitizados e mostram apenas dados operacionais como:
-
-- status HTTP
-- código de erro
-- mensagem resumida
-
-O projeto não deve fazer log de:
-
-- tokens
-- segredos
-- payload bruto completo
-- resposta completa de erro da API
-
-## Variáveis de ambiente
-
-Use `.env.example` como referência local. Em produção, os mesmos nomes devem existir em GitHub Secrets.
-
-### Comuns
-
-| Variável | Uso |
-|---|---|
-| `SUPABASE_URL` | URL do projeto Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY` | chave server-side para upsert nas tabelas raw |
-
-### Hablla
-
-| Variável | Uso |
-|---|---|
-| `HABLLA_TOKEN` | token direto da Hablla, quando disponível |
-| `HABLLA_EMAIL` | fallback de login |
-| `HABLLA_PASSWORD` | fallback de login |
-| `HABLLA_WORKSPACE_ID` | workspace da Hablla |
-| `HABLLA_BOARD_ID` | board consultado por cards |
-| `HABLLA_CARDS_DAYS` | quantidade de dias da janela de cards; padrao 7 |
-| `HABLLA_CARDS_MAX_PAGES` | limite defensivo de paginas em cards; padrao 500 |
-| `HABLLA_ATTENDANTS_DAYS` | quantidade de dias no sync diário de attendants |
-
-### Zenvia
-
-| Variável | Uso |
-|---|---|
-| `ZENVIA_ACCESS_TOKEN` | token de acesso da API |
-| `ZENVIA_REQUEST_DELAY_MS` | pausa em milissegundos entre chamadas para a API da Zenvia; padrao 1000 |
-
-As filas sao buscadas automaticamente pela API da Zenvia antes da sincronizacao.
-
-### SIGE
-
-| Variável | Uso |
-|---|---|
-| `SIGE_TOKEN` | token da API |
-| `SIGE_USER` | usuário exigido pela API |
-| `SIGE_APP` | identificação da aplicação |
-
-### Zoho
-
-| Variável | Uso |
-|---|---|
-| `ZOHO_CLIENT_ID` | OAuth client id |
-| `ZOHO_CLIENT_SECRET` | OAuth client secret |
-| `ZOHO_REFRESH_TOKEN` | refresh token |
-| `ZOHO_ACCOUNT_OWNER` | owner da conta/app no Zoho Creator |
-| `ZOHO_LEADS_APP_NAME` | app usado na integração de leads |
-| `ZOHO_LEADS_REPORT_NAME` | report de leads |
-| `ZOHO_SCHEDULING_APP_NAME` | app usado na integração de agendamento |
-| `ZOHO_SCHEDULING_REPORT_NAME` | report de agendamento |
-
-## Como rodar localmente
-
-### Pré-requisitos
-
-- Node.js 20 ou compatível
-- `.env` preenchido
-
-### Instalação
-
-```bash
-npm install
-```
-
-### Executar tudo
-
-```bash
-node run-local.js
-```
-
-### Executar uma integração específica
-
-```bash
-node run-local.js telefonia
-node run-local.js hablla-attendants
-node run-local.js hablla-cards
-node run-local.js hablla-clients
-node run-local.js site
-node run-local.js agendamento
-node run-local.js faturado
-node run-local.js zoho-leads-recent
-node run-local.js zoho-scheduling-recent
-```
-
-## Como adicionar uma nova integração
-
-1. criar um worker em `src/<origem>/...`
-2. definir a tabela raw de destino
-3. garantir que o `payload` permaneça bruto
-4. definir um `external_id` idempotente
-5. adicionar variáveis ao `.env.example`, se necessário
-6. adicionar workflow em `.github/workflows`
-7. sanitizar logs de erro
-
-## Decisões operacionais importantes
-
-### Por que `external_id` e fundamental
-
-O `external_id` permite reprocessar a mesma janela sem duplicar dados. Isso é o que torna viável buscar 5, 7, 15 dias ou até um mês inteiro repetidamente.
-
-### Por que algumas coletas são diárias e outras mais frequentes
-
-- fontes agregadas por período, como Hablla attendants, exigem cuidado na janela
-- fontes mais transacionais, como cards e clients, podem rodar várias vezes ao dia
-- Zoho full e mais caro operacionalmente, então roda menos
-- Zoho recent cobre atualização curta com custo menor
-
-### Por que não usar um servidor sempre ligado
-
-Para este cenário, isso adicionaria complexidade sem ganho proporcional:
-
-- mais custo fixo
-- mais monitoramento
-- mais manutenção de infraestrutura
-- menos simplicidade para reprocessar manualmente
-
-## Observações
-
-
-- a pasta `tmp/` e ignorada pelo Git e pode ser usada para amostras locais ou diagnósticos manuais
-- `run-local.js` e um atalho operacional, não um orquestrador complexo
-
-
-## Futuras evoluções possíveis
-
-- adicionar métricas por execução
-- persistir checkpoints explícitos por integração
-- criar camada derivada SQL ou ETL separada da raw
-- padronizar documentação por fonte em cada subpasta de `src/`
-
-## Migração: de Google Sheets para Supabase
-
-## Comparativo com arquitetura antiga
-
-
-Antes, cada integração (Hablla, Zenvia, Zoho, SIGE) era implementada como um worker separado, com foco em sincronizar dados diretamente para o Google Sheets. O fluxo envolvia:
-
-- Receber tokens temporários via outro worker (Google Auth)
-- Buscar dados brutos nas APIs
-- Processar, mapear e filtrar campos para compatibilidade com planilhas
-- Escrever dados já tratados diretamente no Google Sheets
-
-### Limitações do modelo antigo
-
-- Dependência de múltiplos repositórios/workers
-- Processamento e transformação feitos antes do armazenamento
-- Dificuldade para versionar, auditar e reprocessar dados brutos
-- Risco de perda de informações por normalização precoce
-- Planilhas sujeitas a alterações manuais e inconsistências
-
-### Evolução: GitHub Actions + Supabase
-
-O sistema atual aproveita o GitHub Actions para orquestrar a extração bruta dos dados, centralizando a automação, versionamento e logs. O tratamento, modelagem e enriquecimento dos dados são feitos diretamente no Supabase ou em camadas derivadas posteriores, nunca na ingestão.
-
-**Vantagens:**
-- Extração bruta e confiável, sem perdas
-- Dados brutos preservados para múltiplos usos
-- Facilidade de reprocessamento e auditoria
-- Redução de complexidade operacional
-- Menos dependências entre repositórios
-
-**Resumo visual:**
+Uma sincronização não apaga a base inteira. Cada módulo identifica as linhas da janela atual — por data e/ou ID —, preserva as demais e grava a substituição em uma única operação do Google Sheets.
 
 ```mermaid
-flowchart LR
-    subgraph "Antigo"
-        A[APIs externas] --> B[Worker Node.js]
-        B --> C[Processamento/Mapeamento]
-        C --> D[Google Sheets]
-        D --> E[Dashboards/BI]
+sequenceDiagram
+    participant API as API do provedor
+    participant Sync as Sincronizador
+    participant Sheets as Google Sheets
+
+    Sync->>API: Coletar e validar páginas
+    API-->>Sync: Registros normalizados
+    Sync->>Sheets: Ler cabeçalho e colunas seletoras
+    Sync->>Sheets: Reler estado imediatamente antes da escrita
+    alt estado mudou por outro escritor
+        Sync-->>Sync: Interromper sem sobrescrever
+    else estado estável
+        Sync->>Sheets: batchUpdate atômico: cabeçalho + exclusões de baixo para cima + inclusão
+        Sync->>Sheets: Reler linhas alvo completas e colunas seletoras
+        Sheets-->>Sync: Estado final
+        Sync-->>Sync: Conferir cabeçalho, alvo completo e projeção preservada
     end
-    subgraph "Atual (GitHub + Supabase)"
-        F[APIs externas] --> G[GitHub Actions]
-        G --> H[Node.js Workers]
-        H --> I[Supabase raw_*]
-        I --> J[Camada derivada/BI]
-    end
-    style A fill:#f9f,stroke:#333,stroke-width:1px
-    style F fill:#bbf,stroke:#333,stroke-width:1px
-    style D fill:#cfc,stroke:#333,stroke-width:1px
-    style I fill:#cfc,stroke:#333,stroke-width:1px
-    style E fill:#ffe,stroke:#333,stroke-width:1px
-    style J fill:#ffe,stroke:#333,stroke-width:1px
 ```
 
+Proteções importantes:
 
+- exclusões são agrupadas e executadas **de baixo para cima**, evitando deslocamento incorreto dos índices;
+- o cabeçalho e a largura de todas as linhas são conferidos antes da escrita;
+- uma mudança concorrente detectada entre as leituras aborta a operação;
+- a pós-validação compara todas as colunas das linhas gravadas e, fora do alvo, confere quantidade, ordem e hash das colunas seletoras;
+- escritas ambíguas não são repetidas cegamente: primeiro o estado final é lido e validado;
+- Apps Script ou outro escritor legítimo pode alterar a planilha depois de uma execução bem-sucedida; por isso uma comparação posterior deve considerar o horário de cada gravação.
 
-Antes deste projeto, a coleta de dados era feita por scripts locais ou manuais, gravando diretamente em planilhas Google Sheets. Abaixo, um comparativo visual e os principais benefícios da mudança:
+## Paginação eficiente do Hablla
 
-### Comparativo visual
+Cards são solicitados com `order=updated_at`, `direction=desc` e corte temporal. A janela de negócio usa **`created_at`**, preservando o comportamento histórico. A data `updated_at` ordena a busca e permite provar quando as páginas seguintes já não podem conter um card criado dentro do prazo.
 
 ```mermaid
 flowchart TD
-    subgraph "Antes: Sheets"
-        A1[APIs externas] --> B1[Script local/manual]
-        B1 --> C1[Google Sheets]
-        C1 --> D1[Planilhas compartilhadas]
-        D1 --> E1[Dashboards/BI]
-    end
-    subgraph "Depois: Supabase + GitHub Actions"
-        A2[APIs externas] --> B2[GitHub Actions]
-        B2 --> C2[Node.js Workers]
-        C2 --> D2[Supabase raw_*]
-        D2 --> E2[Camada derivada/BI]
-    end
-    style A1 fill:#f9f,stroke:#333,stroke-width:1px
-    style A2 fill:#bbf,stroke:#333,stroke-width:1px
-    style C1 fill:#fff,stroke:#333,stroke-width:1px
-    style C2 fill:#fff,stroke:#333,stroke-width:1px
-    style D1 fill:#cfc,stroke:#333,stroke-width:1px
-    style D2 fill:#cfc,stroke:#333,stroke-width:1px
-    style E1 fill:#ffe,stroke:#333,stroke-width:1px
-    style E2 fill:#ffe,stroke:#333,stroke-width:1px
+    P[Buscar página de 50 cards] --> V{Resposta, IDs, created_at<br/>e updated_at válidos?}
+    V -- não --> F[Falhar sem gravar]
+    V -- sim --> O{Ordem updated_at continua decrescente?}
+    O -- não --> FS[Desativar corte antecipado e fazer varredura completa segura]
+    O -- sim --> C{Página inteira anterior ao corte?}
+    C -- sim --> E[Encerrar paginação]
+    C -- não --> N{Página curta ou vazia?}
+    N -- sim --> E
+    N -- não --> P
+    FS --> L{Página curta ou vazia antes do teto?}
+    L -- não --> P2[Continuar varredura]
+    P2 --> L
+    L -- sim --> E
 ```
 
-### Benefícios da troca
+O worker histórico da iCaiu parava na primeira página sem criações recentes depois das duas páginas iniciais. O coletor atual não depende desse número heurístico: inclui somente `created_at` dentro da janela, deduplica por ID preservando a versão com `updated_at` mais recente e encerra cedo apenas enquanto confirma ordem decrescente. Também detecta página repetida e interrompe com erro se atingir `HABLLA_CARDS_MAX_PAGES`; o teto nunca é interpretado como coleta completa.
 
-- **Automação e confiabilidade:** elimina dependência de execução manual/local
-- **Execução auditável:** histórico de execuções e logs centralizados no GitHub
-- **Reprocessamento fácil:** basta acionar workflow, sem sobrescrever dados
-- **Segurança:** segredos e credenciais protegidos por GitHub Secrets
-- **Escalabilidade:** fácil adicionar novas integrações e tabelas
-- **Menos risco de erro humano:** menos manipulação manual de planilhas
-- **Dados brutos preservados:** Supabase armazena o payload original, sem perdas
-- **Facilidade de manutenção:** código versionado, documentação centralizada
+## Resiliência e idempotência
 
-### Limitações do modelo antigo (Sheets)
+| Camada | Proteção | Comportamento diante de falha |
+|---|---|---|
+| HTTP compartilhado | timeout, `Retry-After`, backoff exponencial com jitter | repete somente falhas transitórias de rede, `408`, `429` e `5xx` |
+| Hablla | autenticação compartilhada, espaçamento entre chamadas, contratos de resposta, ordem e teto de páginas | renova credencial quando possível; página inválida, repetida ou incompleta falha antes da persistência |
+| SIGE | limite mínimo entre chamadas, formato explícito da resposta e teto diário | não interpreta resposta malformada como “zero registros” |
+| Zenvia | atraso configurável, validação de resposta e progresso da paginação | interrompe em página repetida ou resposta incompatível |
+| Zoho | OAuth central, no-data explícito, validação e teto de páginas | renova token e rejeita `200` sem o contrato esperado |
+| Google Auth/Sheets | token compartilhado, renovação em `401`, leituras longas com retry | operações de leitura podem ser repetidas; inclusão não idempotente não é repetida cegamente |
+| Supabase | lotes e `upsert` por `external_id` | repete lotes idempotentes somente em falhas transitórias |
 
-- Scripts dependiam de execução manual ou agendamento local
-- Planilhas podiam ser alteradas inadvertidamente
-- Dificuldade para versionar e auditar mudanças
-- Limite de linhas/células e performance em grandes volumes
-- Dificuldade para reprocessar períodos antigos
+Uma execução termina com erro quando não pode provar que a coleta ou a gravação ficou íntegra. Isso é intencional: um workflow vermelho é mais seguro do que publicar silenciosamente uma base parcial.
 
-## Visualizações para manutenção futura
-
-### Fluxo de manutenção de integrações
+## Observabilidade e renovação das agendas
 
 ```mermaid
-graph TD
-    subgraph "Manutenção e Evolução"
-        A[Adição de nova integração] --> B[Worker em src/<origem>]
-        B --> C[Definir tabela raw_*]
-        C --> D[Garantir payload bruto]
-        D --> E[Definir external_id]
-        E --> F[Adicionar workflow]
-        F --> G[Sanitizar logs]
-        G --> H[Testar localmente]
-    end
-    style A fill:#bbf,stroke:#333,stroke-width:1px
-    style H fill:#cfc,stroke:#333,stroke-width:1px
+flowchart LR
+    W[Workflows de produção] -->|workflow_run com falha| O[Observability]
+    T[Watchdog a cada 3 horas, minuto 53 BRT] --> O
+    O --> API[GitHub Actions API]
+    API --> AGE{Último sucesso dentro do prazo?}
+    AGE -- não --> D[Alerta Discord + workflow vermelho]
+    AGE -- sim --> SUM[Resumo de saúde]
+    O --> HC[Healthchecks dead-man]
+    HB[Heartbeat no máximo a cada 5 dias] --> COMMIT[Commit somente em ops/heartbeat.txt]
+    COMMIT --> ACTIVE[Atividade do repositório]
 ```
 
-### Grafo de relacionamento Hablla (cards → persons → telefone)
+O sistema possui quatro sinais complementares:
 
-```mermaid
-graph LR
-    subgraph "Relacionamento Hablla"
-        Card[Card]
-        Card -- persons[] --> Person[Person]
-        Person -- phones --> Phone[Telefone]
-    end
-    style Card fill:#fff,stroke:#333,stroke-width:1px
-    style Person fill:#cfc,stroke:#333,stroke-width:1px
-    style Phone fill:#ffe,stroke:#333,stroke-width:1px
+1. **alerta imediato:** uma conclusão diferente de `success` dispara o workflow `Observability`;
+2. **watchdog de atualidade:** a cada três horas, `scripts/health.js` consulta a API do GitHub e compara o último sucesso com `.github/workflow-health.json`;
+3. **dead-man externo:** `HEALTHCHECKS_PING_URL` recebe início, sucesso ou falha; a ausência do ping também alerta quando o próprio GitHub Actions deixa de executar;
+4. **heartbeat do repositório:** `Repository Heartbeat` usa o `GITHUB_TOKEN` efêmero e restrito ao próprio repositório para atualizar somente `ops/heartbeat.txt`, sem acessar dados de outra empresa.
+
+| Workflow observado | Idade máxima sem sucesso |
+|---|---:|
+| Sheets Sync | 12 h |
+| Hablla Cards / Clients | 10 h |
+| Hablla Attendants | 36 h |
+| SIGE Faturamento / Zenvia Calls | 36 h |
+| Zoho Leads Recent / Scheduling Recent | 11 h |
+| Zoho Leads / Scheduling | 36 h |
+| Repository Heartbeat | 144 h |
+
+O GitHub ainda pode enviar notificações por e-mail ou web. Para usar esse canal como redundância, habilite notificações de GitHub Actions — preferencialmente somente falhas — na conta responsável pelas agendas.
+
+### Estados operacionais
+
+| Estado | Significado | Ação |
+|---|---|---|
+| 🟢 Saudável | último sucesso está dentro do prazo | nenhuma intervenção |
+| 🟡 Parcial | automações verdes, mas Discord ou Healthchecks não foi configurado | configurar o canal externo; o workflow registra o aviso |
+| 🔴 Intervenção | falha, workflow desativado ou último sucesso vencido | seguir o runbook abaixo |
+
+## Configuração
+
+Copie `.env.example` para `.env` somente no ambiente local. O arquivo `.env` é ignorado pelo Git e **valores reais nunca devem ser adicionados ao README, ao código ou aos logs**.
+
+### GitHub Secrets
+
+Configure apenas no repositório `operacoesicaiu/icaiu-data`:
+
+| Uso | Nomes dos secrets |
+|---|---|
+| Google | `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PRIVATE_KEY` |
+| Supabase | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` |
+| Hablla | `HABLLA_TOKEN`, `HABLLA_EMAIL`, `HABLLA_PASSWORD`, `HABLLA_WORKSPACE_ID`, `HABLLA_BOARD_ID`, `HABLLA_SPREADSHEET_ID` |
+| SIGE | `SIGE_TOKEN`, `SIGE_USER`, `SIGE_APP`, `SIGE_SPREADSHEET_ID` |
+| Zenvia | `ZENVIA_ACCESS_TOKEN`, `ZENVIA_QUEUE_ID`, `ZENVIA_SPREADSHEET_ID`, `ZENVIA_SHEET_NAME` |
+| Zoho OAuth | `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, `ZOHO_ACCOUNT_OWNER` |
+| Zoho Leads | `ZOHO_LEADS_APP_NAME`, `ZOHO_LEADS_REPORT_NAME`, `ZOHO_LEADS_COLUMN_MAPPING`, `ZOHO_LEADS_SPREADSHEET_ID`, `ZOHO_LEADS_SHEET_NAME` |
+| Zoho Scheduling | `ZOHO_SCHEDULING_APP_NAME`, `ZOHO_SCHEDULING_REPORT_NAME`, `ZOHO_SCHEDULING_COLUMN_MAPPING`, `ZOHO_SCHEDULING_SPREADSHEET_ID`, `ZOHO_SCHEDULING_SHEET_NAME` |
+| Operação | `DISCORD_WEBHOOK_URL`, `HEALTHCHECKS_PING_URL` |
+
+Discord e Healthchecks são opcionais para a execução dos coletores, mas necessários para alertas externos completos. O heartbeat recebe apenas `contents: write` no próprio job e não usa segredo persistente.
+
+### GitHub Variables e ajustes de execução
+
+Os workflows Hablla Cards leem as GitHub Variables `HABLLA_CARDS_DAYS` e `HABLLA_CARDS_MAX_PAGES`. Na ausência delas, o código aplica os padrões documentados em `.env.example`.
+
+Outros controles reconhecidos localmente incluem:
+
+```text
+GOOGLE_SHEETS_READ_TIMEOUT_MS
+GOOGLE_SHEETS_READ_MAX_ATTEMPTS
+SUPABASE_BATCH_SIZE
+SUPABASE_MAX_ATTEMPTS
+HABLLA_CLIENTS_MAX_PAGES
+HABLLA_ATTENDANTS_DAYS
+HABLLA_MIN_INTERVAL_MS
+HABLLA_REQUEST_TIMEOUT_MS
+HABLLA_MAX_ATTEMPTS
+SYNC_SCRIPT_MAX_ATTEMPTS
+SIGE_MIN_INTERVAL_MS
+SIGE_MAX_RECORDS_PER_DAY
+ZENVIA_REQUEST_DELAY_MS
+ZOHO_MAX_PAGES
 ```
 
-## Orientações para manutenção futura
+Não aumente limites ou tentativas apenas para esconder uma falha recorrente; primeiro confirme contrato da API, paginação, cota e tempo de execução.
 
-- Sempre documente novas integrações e tabelas no README e/ou subpastas
-- Mantenha o payload bruto nas tabelas raw, sem enriquecimento
-- Use external_id idempotente para evitar duplicidade
-- Prefira logs operacionais, nunca logue payloads completos ou segredos
-- Teste localmente antes de subir workflows
-- Atualize variáveis de ambiente e secrets conforme necessário
-- Consulte exemplos e diagramas acima para entender o fluxo
+## Execução e testes
+
+Instale exatamente as dependências travadas e execute a suíte:
+
+```bash
+npm ci
+npm test
+```
+
+Exemplos de coletores Supabase locais:
+
+```bash
+node run-local.js hablla-cards
+node run-local.js hablla-clients
+node run-local.js hablla-attendants
+node run-local.js zenvia-calls
+node run-local.js sige-faturamento
+node run-local.js zoho-leads
+node run-local.js zoho-scheduling
+```
+
+Fluxo central de planilhas:
+
+```bash
+node src/sheets/run.js sige/sheets/sync.js zenvia/sheets/sync.js zoho/sheets/leads.js hablla/sheets/sync.js
+```
+
+Agendamento Zoho para Sheets, executado separadamente:
+
+```bash
+node src/sheets/run.js zoho/sheets/scheduling.js
+```
+
+> [!CAUTION]
+> Os comandos de integração fazem chamadas e escritas reais. Antes de executá-los, use somente o `.env` da iCaiu, registre uma fotografia sem dados sensíveis — contagem, largura e hash — e compare novamente após a execução.
+
+A suíte automatizada cobre contratos de resposta, paginação, retries, autenticação Google, integridade da substituição no Sheets, `upsert` e observabilidade. Ela reduz risco de regressão, mas não substitui uma execução real verde nem a comparação antes/depois das bases. Os badges no topo mostram o estado mais recente publicado no GitHub Actions.
+
+## Segurança em repositório público
+
+- nunca registre tokens, chaves, URLs secretas, payloads completos, nomes, telefones, e-mails ou IDs de clientes;
+- logs operacionais devem mostrar somente etapa, contagem, duração e categoria pública da falha;
+- respostas de provedores são validadas, mas não despejadas no console;
+- `.env` permanece fora do Git; apenas `.env.example` com nomes e valores inofensivos é versionado;
+- resultados `raw_` ficam no Supabase, não em artefatos públicos do Actions;
+- credenciais de uma empresa não devem ser reaproveitadas para consultar dados de outra.
+
+## Runbook de intervenção
+
+1. Abra o link do alerta ou a aba **Actions** e leia o resumo da execução, sem copiar payloads para issues públicas.
+2. Identifique a classe do problema:
+   - `401`/`403`: credencial expirada, secret ausente ou permissão removida;
+   - `408`/`429`/`5xx`: indisponibilidade ou limite do provedor; confirme se os retries esgotaram;
+   - resposta ou página inválida: possível mudança no contrato da API;
+   - validação do Sheets: concorrência, cabeçalho alterado ou resultado final diferente do esperado;
+   - workflow vencido/desativado: execute manualmente `Repository Heartbeat` e depois o workflow afetado.
+3. Corrija o secret, permissão, contrato ou destino. Nunca reduza uma validação de integridade para fazer a execução “ficar verde”.
+4. Antes do rerun, fotografe a base por contagem, largura e hash; depois compare os mesmos indicadores e confira a janela afetada.
+5. Execute manualmente apenas o workflow necessário e confirme `success` no próprio Actions.
+6. Se a execução ficar verde mas o watchdog continuar vermelho, aguarde a próxima verificação ou execute `Observability` manualmente.
+
+Para `Zoho Scheduling Sheets`, além do workflow verde, confirme explicitamente que `ZOHO_SCHEDULING_SPREADSHEET_ID` e `ZOHO_SCHEDULING_SHEET_NAME` apontam para a base correta da iCaiu.

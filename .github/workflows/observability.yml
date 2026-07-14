@@ -1,0 +1,65 @@
+name: Observability
+
+on:
+  schedule:
+    - cron: '53 */3 * * *'
+      timezone: 'America/Sao_Paulo'
+  workflow_run:
+    workflows:
+      - Sheets Sync
+      - Hablla Cards
+      - Hablla Clients
+      - Hablla Attendants
+      - SIGE Faturamento
+      - Zenvia Calls
+      - Zoho Leads Recent
+      - Zoho Leads
+      - Zoho Scheduling Recent
+      - Zoho Scheduling
+      - Repository Heartbeat
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: observability-${{ github.event_name }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  completion-alert:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Alertar falha
+        run: node scripts/health.js completion
+        env:
+          COMPANY_NAME: iCaiu
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  watchdog:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Verificar atualidade das automações
+        run: node scripts/health.js watchdog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}

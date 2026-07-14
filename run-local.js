@@ -3,30 +3,27 @@
  * Uso: node run-local.js [nome-do-script]
  *
  * Exemplos:
- *   node run-local.js                     → roda todos
- *   node run-local.js telefonia           → só telefonia
- *   node run-local.js hablla-attendants   → só hablla attendants
+ *   node run-local.js                     → roda todos os coletores Supabase
+ *   node run-local.js zenvia-calls        → roda um coletor específico
  *   node run-local.js hablla-cards
- *   node run-local.js hablla-clients
  *   node run-local.js zoho-leads-recent
  *   node run-local.js zoho-scheduling-recent
- *   node run-local.js site
- *   node run-local.js agendamento
- *   node run-local.js faturado
+ *   node run-local.js sige-faturamento
  */
 
 require('dotenv').config();
+const formatPublicError = require('./src/lib/public-error');
 
 const scripts = {
-  telefonia:        require('./src/zenvia/zenvia-calls'),
-  'hablla-attendants': require('./src/hablla/hablla-attendants'),
-  'hablla-cards':   require('./src/hablla/hablla-cards'),
-  'hablla-clients': require('./src/hablla/hablla-clients'),
-  'zoho-leads-recent': require('./src/zoho/zoho-leads-recent'),
-  'zoho-scheduling-recent': require('./src/zoho/zoho-scheduling-recent'),
-  site:             require('./src/zoho/zoho-leads'),
-  agendamento:      require('./src/zoho/zoho-scheduling'),
-  faturado:         require('./src/sige/sige-faturamento')
+  'zenvia-calls': require('./src/zenvia/supabase/calls'),
+  'hablla-attendants': require('./src/hablla/supabase/attendants'),
+  'hablla-cards': require('./src/hablla/supabase/cards'),
+  'hablla-clients': require('./src/hablla/supabase/clients'),
+  'zoho-leads-recent': require('./src/zoho/supabase/leads-recent'),
+  'zoho-scheduling-recent': require('./src/zoho/supabase/scheduling-recent'),
+  'zoho-leads': require('./src/zoho/supabase/leads'),
+  'zoho-scheduling': require('./src/zoho/supabase/scheduling'),
+  'sige-faturamento': require('./src/sige/supabase/faturamento')
 };
 
 async function main() {
@@ -53,6 +50,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('Erro no runner:', err);
+  console.error('Erro no runner:', formatPublicError(err));
   process.exit(1);
 });

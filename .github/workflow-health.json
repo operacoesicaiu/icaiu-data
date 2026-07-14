@@ -1,0 +1,17 @@
+{
+  "company": "iCaiu",
+  "branch": "main",
+  "workflows": [
+    { "file": "sheets-sync.yml", "name": "Sheets Sync", "maxAgeHours": 12 },
+    { "file": "hablla-cards.yml", "name": "Hablla Cards", "maxAgeHours": 10 },
+    { "file": "hablla-clients.yml", "name": "Hablla Clients", "maxAgeHours": 10 },
+    { "file": "hablla-attendants.yml", "name": "Hablla Attendants", "maxAgeHours": 36 },
+    { "file": "sige-faturamento.yml", "name": "SIGE Faturamento", "maxAgeHours": 36 },
+    { "file": "zenvia-calls.yml", "name": "Zenvia Calls", "maxAgeHours": 36 },
+    { "file": "zoho-leads-recent.yml", "name": "Zoho Leads Recent", "maxAgeHours": 11 },
+    { "file": "zoho-leads.yml", "name": "Zoho Leads", "maxAgeHours": 36 },
+    { "file": "zoho-scheduling-recent.yml", "name": "Zoho Scheduling Recent", "maxAgeHours": 11 },
+    { "file": "zoho-scheduling.yml", "name": "Zoho Scheduling", "maxAgeHours": 36 },
+    { "file": "repository-heartbeat.yml", "name": "Repository Heartbeat", "maxAgeHours": 144 }
+  ]
+}

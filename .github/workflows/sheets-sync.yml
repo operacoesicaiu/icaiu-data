@@ -2,7 +2,7 @@ name: Sheets Sync
 
 on:
   schedule:
-    - cron: "37 1,7,13,19 * * *"
+    - cron: "37 5,11,17,23 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -17,16 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Sincronizar planilhas
-        run: node src/google/run-sheets-syncs.js sige/sige-sheets-sync.js zenvia/zenvia-sheets-sync.js zoho/zoho-leads-sheets-sync.js hablla/hablla-sheets-sync.js
+        run: node src/sheets/run.js sige/sheets/sync.js zenvia/sheets/sync.js zoho/sheets/leads.js hablla/sheets/sync.js
         env:
           REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,SIGE_TOKEN,SIGE_USER,SIGE_APP,SIGE_SPREADSHEET_ID,ZENVIA_ACCESS_TOKEN,ZENVIA_SPREADSHEET_ID,ZENVIA_SHEET_NAME,ZOHO_CLIENT_ID,ZOHO_CLIENT_SECRET,ZOHO_REFRESH_TOKEN,ZOHO_ACCOUNT_OWNER,ZOHO_LEADS_APP_NAME,ZOHO_LEADS_REPORT_NAME,ZOHO_LEADS_COLUMN_MAPPING,ZOHO_LEADS_SPREADSHEET_ID,ZOHO_LEADS_SHEET_NAME,HABLLA_TOKEN,HABLLA_WORKSPACE_ID,HABLLA_BOARD_ID,HABLLA_SPREADSHEET_ID
           GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
@@ -49,6 +49,8 @@ jobs:
           ZOHO_LEADS_SPREADSHEET_ID: ${{ secrets.ZOHO_LEADS_SPREADSHEET_ID }}
           ZOHO_LEADS_SHEET_NAME: ${{ secrets.ZOHO_LEADS_SHEET_NAME }}
           HABLLA_TOKEN: ${{ secrets.HABLLA_TOKEN }}
+          HABLLA_EMAIL: ${{ secrets.HABLLA_EMAIL }}
+          HABLLA_PASSWORD: ${{ secrets.HABLLA_PASSWORD }}
           HABLLA_WORKSPACE_ID: ${{ secrets.HABLLA_WORKSPACE_ID }}
           HABLLA_BOARD_ID: ${{ secrets.HABLLA_BOARD_ID }}
           HABLLA_SPREADSHEET_ID: ${{ secrets.HABLLA_SPREADSHEET_ID }}

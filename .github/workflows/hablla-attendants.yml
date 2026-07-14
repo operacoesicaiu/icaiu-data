@@ -2,31 +2,38 @@ name: Hablla Attendants
 
 on:
   schedule:
-    - cron: '07 6 * * *'
+    - cron: '07 7 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: hablla-attendants
+  group: hablla-supabase-api
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+          persist-credentials: false
         env:
           GIT_TRACE: 0
           GIT_CURL_VERBOSE: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
-      - run: npm install
-      - run: node src/hablla/hablla-attendants.js
+          node-version: 24
+      - run: npm ci
+      - run: node src/hablla/supabase/attendants.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           HABLLA_TOKEN: ${{ secrets.HABLLA_TOKEN }}
+          HABLLA_EMAIL: ${{ secrets.HABLLA_EMAIL }}
+          HABLLA_PASSWORD: ${{ secrets.HABLLA_PASSWORD }}
           HABLLA_WORKSPACE_ID: ${{ secrets.HABLLA_WORKSPACE_ID }}
