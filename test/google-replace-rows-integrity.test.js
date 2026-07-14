@@ -13,8 +13,16 @@ function createHarness({ initialRows, beforeSelectorRead, onWrite }) {
   let selectorReads = 0;
   let writeCalls = 0;
 
-  sheets.getSheetIdByTitle = async () => ({ "Base Dados": 7 });
+  sheets.getSheetPropertiesByTitle = async () => ({
+    "Base Dados": {
+      sheetId: 7,
+      gridProperties: { rowCount: 1_000, columnCount: header.length },
+    },
+  });
   sheets.getValuesBatch = async (ranges, options = {}) => {
+    if (options.valueRenderOption === "FORMULA") {
+      return [[header, ...state.rows.map((row) => [...row])]];
+    }
     if (options.valueRenderOption === "UNFORMATTED_VALUE") {
       return ranges.map((range) => {
         const match = range.match(/![A-Z]+(\d+):[A-Z]+(\d+)$/);

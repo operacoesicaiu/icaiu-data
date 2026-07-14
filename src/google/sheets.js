@@ -218,14 +218,21 @@ function completeRowsHash(rows, width) {
   return secureStateHash(rows.map((row) => canonicalRow(row, width)));
 }
 
-function selectedRowsHash(rows, indexes, { omitEmpty = false } = {}) {
-  const state = [];
-  for (const row of rows) {
-    const values = indexes.map((index) => canonicalCell(row[index]));
-    if (omitEmpty && values.every((value) => value[0] === "empty")) continue;
-    state.push(values);
-  }
-  return secureStateHash(state);
+function preservedRowsHash(rows, width) {
+  return secureStateHash(
+    rows.map((row) =>
+      Array.from({ length: width }, (_, index) => {
+        const value = row[index];
+        // Deleting rows makes Google rewrite relative references (for example,
+        // =B10 becomes =B9). The formula cell is still preserved, so compare
+        // its presence while keeping exact comparison for every literal value.
+        if (typeof value === "string" && value.startsWith("=")) {
+          return ["formula"];
+        }
+        return canonicalCell(value);
+      }),
+    ),
+  );
 }
 
 function selectorSnapshotHash(state, indexes, headerWidth) {
@@ -234,6 +241,18 @@ function selectorSnapshotHash(state, indexes, headerWidth) {
     header: canonicalRow(state.first, headerWidth),
     rows: state.body.map((row) => indexes.map((index) => canonicalCell(row[index]))),
   });
+}
+
+function rowHasContent(row) {
+  return Array.isArray(row) && row.some(
+    (value) => value !== null && value !== undefined && value !== "",
+  );
+}
+
+function trimTrailingEmptyRows(rows) {
+  let length = rows.length;
+  while (length > 0 && !rowHasContent(rows[length - 1])) length--;
+  return rows.slice(0, length);
 }
 
 function contiguousBlocks(indexes) {
@@ -324,7 +343,7 @@ class GoogleSheets {
     this.tokenExpiresAt = Number(tokenExpiresAt || process.env.GOOGLE_TOKEN_EXPIRES_AT || 0);
     this.refreshAccessToken = refreshAccessToken || (() => getGoogleAccessToken({ forceRefresh: true }));
     this.refreshPromise = null;
-    this.sheetIdsPromise = null;
+    this.sheetPropertiesPromise = null;
     this.http = axios.create({
       baseURL: `${SHEETS_BASE_URL}/${spreadsheetId}`,
       timeout: 60000,
@@ -399,15 +418,25 @@ class GoogleSheets {
     return response.data;
   }
 
-  async getSheetIdByTitle() {
-    if (!this.sheetIdsPromise) {
-      this.sheetIdsPromise = this.getSpreadsheet().then((spreadsheet) => {
+  async getSheetPropertiesByTitle({ forceRefresh = false } = {}) {
+    if (forceRefresh) this.sheetPropertiesPromise = null;
+    if (!this.sheetPropertiesPromise) {
+      this.sheetPropertiesPromise = this.getSpreadsheet().then((spreadsheet) => {
         const result = {};
-        for (const sheet of spreadsheet.sheets || []) result[sheet.properties.title] = sheet.properties.sheetId;
+        for (const sheet of spreadsheet.sheets || []) {
+          result[sheet.properties.title] = sheet.properties;
+        }
         return result;
       });
     }
-    return this.sheetIdsPromise;
+    return this.sheetPropertiesPromise;
+  }
+
+  async getSheetIdByTitle() {
+    const properties = await this.getSheetPropertiesByTitle();
+    return Object.fromEntries(
+      Object.entries(properties).map(([title, value]) => [title, value.sheetId]),
+    );
   }
 
   async getValues(range) {
@@ -510,33 +539,6 @@ class GoogleSheets {
     return true;
   }
 
-  async applyTypedNumberFormats(sheetTitle, sheetId, blocks) {
-    if (!blocks.length) return;
-    let writeError;
-    for (let start = 0; start < blocks.length; start += 500) {
-      const requests = blocks
-        .slice(start, start + 500)
-        .map((block) => numberFormatRequest(sheetId, block));
-      try {
-        await this.batchUpdate(requests, { idempotent: true });
-      } catch (error) {
-        writeError ||= error;
-      }
-    }
-
-    let formatsMatch;
-    try {
-      formatsMatch = await this.numberFormatsMatch(sheetTitle, blocks);
-    } catch (validationError) {
-      if (writeError) throw writeError;
-      throw validationError;
-    }
-    if (!formatsMatch) {
-      if (writeError) throw writeError;
-      throw new Error(`Validacao de numberFormat apos escrita falhou: ${sheetTitle}`);
-    }
-  }
-
   async batchUpdate(requests, { idempotent = false } = {}) {
     if (!requests.length) return { skipped: true };
     const response = await this.request(
@@ -619,7 +621,17 @@ class GoogleSheets {
           (index) => `${quotedTitle}!${columnLetter(index)}:${columnLetter(index)}`,
         ),
       ];
-      const [headerRows, ...selectorColumns] = await this.getValuesBatch(ranges);
+      const [selectorValues, completeValues] = await Promise.all([
+        this.getValuesBatch(ranges),
+        this.getValuesBatch(
+          [`${quotedTitle}!${columnMatch[1]}:${columnMatch[2]}`],
+          {
+            valueRenderOption: "FORMULA",
+            dateTimeRenderOption: "SERIAL_NUMBER",
+          },
+        ),
+      ]);
+      const [headerRows, ...selectorColumns] = selectorValues;
       const first = headerRows[0] || [];
       const normalized = (value) => String(value ?? "").trim().toLowerCase();
       const headerMatches = header.filter((value, index) => normalized(first[index]) === normalized(value)).length;
@@ -627,7 +639,15 @@ class GoogleSheets {
       const columns = selectorColumns.map((column) =>
         stateHasHeader ? column.slice(1) : column,
       );
-      const bodyLength = Math.max(0, ...columns.map((column) => column.length));
+      const completeRows = completeValues[0] || [];
+      const completeBodySource = stateHasHeader
+        ? completeRows.slice(1)
+        : completeRows;
+      const bodyLength = Math.max(
+        completeBodySource.length,
+        0,
+        ...columns.map((column) => column.length),
+      );
       const body = Array.from({ length: bodyLength }, (_, rowIndex) => {
         const row = [];
         matchColumnIndexes.forEach((columnIndexValue, selectorIndex) => {
@@ -635,47 +655,35 @@ class GoogleSheets {
         });
         return row;
       });
-      return { body, first, hasHeader: stateHasHeader };
-    };
-
-    const readCompleteRowsAtIndexes = async (indexes, stateHasHeader) => {
-      const blocks = contiguousBlocks(indexes);
-      const rows = [];
-      for (let start = 0; start < blocks.length; start += 50) {
-        const chunk = blocks.slice(start, start + 50);
-        const ranges = chunk.map((block) => {
-          const rowOffset = stateHasHeader ? 2 : 1;
-          const firstRow = block.start + rowOffset;
-          const lastRow = block.end - 1 + rowOffset;
-          return `${quotedTitle}!${columnMatch[1]}${firstRow}:${columnMatch[2]}${lastRow}`;
-        });
-        const valuesByBlock = await this.getValuesBatch(ranges, {
-          valueRenderOption: "UNFORMATTED_VALUE",
-          dateTimeRenderOption: "SERIAL_NUMBER",
-        });
-        chunk.forEach((block, blockIndex) => {
-          const values = valuesByBlock[blockIndex] || [];
-          for (let offset = 0; offset < block.end - block.start; offset++) {
-            rows.push(values[offset] || []);
-          }
-        });
-      }
-      return rows;
+      const completeBody = Array.from(
+        { length: bodyLength },
+        (_, rowIndex) => completeBodySource[rowIndex] || [],
+      );
+      return { body, completeBody, first, hasHeader: stateHasHeader };
     };
 
     const initialState = await readState();
-    const sheetIds = await this.getSheetIdByTitle();
-    const sheetId = sheetIds[sheetTitle];
-    if (sheetId === undefined)
-      throw new Error(`Aba nao encontrada: ${sheetTitle}`);
+    const sheetPropertiesByTitle = await this.getSheetPropertiesByTitle({
+      forceRefresh: true,
+    });
+    const sheetProperties = sheetPropertiesByTitle[sheetTitle];
+    if (!sheetProperties) throw new Error(`Aba nao encontrada: ${sheetTitle}`);
+    const sheetId = sheetProperties.sheetId;
+    const gridRowCount = Number(sheetProperties.gridProperties?.rowCount);
+    if (!Number.isInteger(gridRowCount) || gridRowCount < 1) {
+      throw new Error(`rowCount invalido para a aba: ${sheetTitle}`);
+    }
 
     const preWriteState = await readState();
     if (
       selectorSnapshotHash(initialState, matchColumnIndexes, comparisonWidth) !==
-      selectorSnapshotHash(preWriteState, matchColumnIndexes, comparisonWidth)
+        selectorSnapshotHash(preWriteState, matchColumnIndexes, comparisonWidth) ||
+      completeRowsHash(initialState.completeBody, comparisonWidth) !==
+        completeRowsHash(preWriteState.completeBody, comparisonWidth)
     ) {
       throw new Error(`Estado da planilha mudou antes da escrita: ${sheetTitle}`);
     }
+
 
     const { body, hasHeader } = preWriteState;
     const matched = body
@@ -688,12 +696,23 @@ class GoogleSheets {
       throw new Error(`newRows[${invalidReplacement}] nao pertence ao conjunto substituido`);
     }
     const matchedBodyIndexes = new Set(matched.map((index) => index - 1));
-    const nonTargetBefore = body.filter((_, index) => !matchedBodyIndexes.has(index));
-    const nonTargetHashBefore = selectedRowsHash(
-      nonTargetBefore,
-      matchColumnIndexes,
-      { omitEmpty: true },
+    const remainingCompleteRows = trimTrailingEmptyRows(
+      preWriteState.completeBody.filter(
+        (_, index) => !matchedBodyIndexes.has(index),
+      ),
     );
+    const remainingCompleteHashBefore = preservedRowsHash(
+      remainingCompleteRows,
+      comparisonWidth,
+    );
+    const writeBodyStartIndex = remainingCompleteRows.length;
+    const writeGridStartIndex = writeBodyStartIndex + 1;
+    const writeGridEndIndex = writeGridStartIndex + newRows.length;
+    const writtenIndexes = Array.from(
+      { length: newRows.length },
+      (_, index) => writeBodyStartIndex + index,
+    );
+    const formatBlocks = typedNumberFormatBlocks(newRows, writtenIndexes, true);
 
     const blocks = contiguousBlocks(matched);
     const requests = [];
@@ -711,9 +730,14 @@ class GoogleSheets {
           startRowIndex: 0,
           endRowIndex: 1,
           startColumnIndex: 0,
-          endColumnIndex: header.length,
+          endColumnIndex: comparisonWidth,
         },
-        rows: [{ values: header.map(literalCell) }],
+        rows: [{
+          values: Array.from(
+            { length: comparisonWidth },
+            (_, index) => literalValueCell(header[index]),
+          ),
+        }],
         fields: "userEnteredValue",
       },
     });
@@ -728,14 +752,40 @@ class GoogleSheets {
           },
         },
       });
-    if (newRows.length)
+    const rowCountAfterDeletes =
+      gridRowCount + (hasHeader ? 0 : 1) - matched.length;
+    if (writeGridEndIndex > rowCountAfterDeletes) {
       requests.push({
-        appendCells: {
+        appendDimension: {
           sheetId,
-          rows: newRows.map((row) => ({ values: row.map(literalValueCell) })),
+          dimension: "ROWS",
+          length: writeGridEndIndex - rowCountAfterDeletes,
+        },
+      });
+    }
+    if (newRows.length) {
+      requests.push({
+        updateCells: {
+          range: {
+            sheetId,
+            startRowIndex: writeGridStartIndex,
+            endRowIndex: writeGridEndIndex,
+            startColumnIndex: 0,
+            endColumnIndex: comparisonWidth,
+          },
+          rows: newRows.map((row) => ({
+            values: Array.from(
+              { length: comparisonWidth },
+              (_, index) => literalValueCell(row[index]),
+            ),
+          })),
           fields: "userEnteredValue",
         },
       });
+    }
+    requests.push(
+      ...formatBlocks.map((block) => numberFormatRequest(sheetId, block)),
+    );
     let writeError;
     try {
       await this.batchUpdate(requests, { idempotent: false });
@@ -750,97 +800,65 @@ class GoogleSheets {
       if (writeError) throw writeError;
       throw validationReadError;
     }
-    const expectedBodyLength = body.length - matched.length + newRows.length;
-    const appendedStartIndex = afterValues.body.length - newRows.length;
-    const appendedIndexes = Array.from(
-      { length: newRows.length },
-      (_, index) => appendedStartIndex + index,
-    );
-    const appendedIndexSet = new Set(appendedIndexes);
-    const nonTargetAfterValues = afterValues.body.filter(
-      (_, index) => !appendedIndexSet.has(index),
-    );
-    const headerMatchesBeforeFormat =
+    const expectedBodyLength = writeBodyStartIndex + newRows.length;
+    const headerMatchesAfterWrite =
       afterValues.hasHeader &&
       completeRowsHash([afterValues.first], comparisonWidth) ===
         completeRowsHash([header], comparisonWidth);
-    const nonTargetMatchesBeforeFormat =
-      selectedRowsHash(nonTargetAfterValues, matchColumnIndexes, {
-        omitEmpty: true,
-      }) ===
-      nonTargetHashBefore;
+    const remainingRowsMatchAfterWrite =
+      afterValues.completeBody.length === expectedBodyLength &&
+      preservedRowsHash(
+        afterValues.completeBody.slice(0, writeBodyStartIndex),
+        comparisonWidth,
+      ) === remainingCompleteHashBefore;
 
-    let appendedRowsAfter;
-    try {
-      appendedRowsAfter = await readCompleteRowsAtIndexes(
-        appendedIndexes,
-        afterValues.hasHeader,
-      );
-    } catch (validationReadError) {
-      if (writeError) throw writeError;
-      throw validationReadError;
-    }
-    const appendedValuesMatch =
-      appendedStartIndex >= 0 &&
+    const writtenRowsAfter = writtenIndexes.map(
+      (index) => afterValues.completeBody[index] || [],
+    );
+    const writtenValuesMatch =
       afterValues.body.length === expectedBodyLength &&
-      completeRowsHash(appendedRowsAfter, comparisonWidth) ===
+      completeRowsHash(writtenRowsAfter, comparisonWidth) ===
         completeRowsHash(newRows, comparisonWidth);
 
     if (
-      !headerMatchesBeforeFormat ||
-      !nonTargetMatchesBeforeFormat ||
-      !appendedValuesMatch
+      !headerMatchesAfterWrite ||
+      !remainingRowsMatchAfterWrite ||
+      !writtenValuesMatch
     ) {
       if (writeError) throw writeError;
       throw new Error(`Validacao completa apos escrita falhou: ${sheetTitle}`);
     }
 
-    const formatBlocks = typedNumberFormatBlocks(
-      newRows,
-      appendedIndexes,
-      afterValues.hasHeader,
-    );
-    await this.applyTypedNumberFormats(sheetTitle, sheetId, formatBlocks);
-
-    const after = await readState();
-    const targetIndexesAfter = after.body
+    const targetIndexesAfter = afterValues.body
       .map((row, index) => (shouldReplace(row, index) ? index : null))
       .filter((index) => index !== null);
-    const targetIndexSetAfter = new Set(targetIndexesAfter);
-    const nonTargetAfter = after.body.filter(
-      (_, index) => !targetIndexSetAfter.has(index),
-    );
     const targetIndexesMatch =
-      targetIndexesAfter.length === appendedIndexes.length &&
+      targetIndexesAfter.length === writtenIndexes.length &&
       targetIndexesAfter.every(
-        (value, index) => value === appendedIndexes[index],
+        (value, index) => value === writtenIndexes[index],
       );
-    const headerMatchesCompletely =
-      after.hasHeader &&
-      completeRowsHash([after.first], comparisonWidth) ===
-        completeRowsHash([header], comparisonWidth);
-    const nonTargetMatches =
-      selectedRowsHash(nonTargetAfter, matchColumnIndexes, { omitEmpty: true }) ===
-      nonTargetHashBefore;
-    const completeRowsAfter = await readCompleteRowsAtIndexes(
-      targetIndexesAfter,
-      after.hasHeader,
-    );
-    const targetMatchesCompletely =
-      targetIndexesMatch &&
-      after.body.length === expectedBodyLength &&
-      completeRowsHash(completeRowsAfter, comparisonWidth) ===
-        completeRowsHash(newRows, comparisonWidth);
+    if (!targetIndexesMatch) {
+      if (writeError) throw writeError;
+      throw new Error(`Validacao completa apos escrita falhou: ${sheetTitle}`);
+    }
 
-    if (!headerMatchesCompletely || !nonTargetMatches || !targetMatchesCompletely) {
-      throw new Error(`Validacao completa apos formatacao falhou: ${sheetTitle}`);
+    let formatsMatch;
+    try {
+      formatsMatch = await this.numberFormatsMatch(sheetTitle, formatBlocks);
+    } catch (validationError) {
+      if (writeError) throw writeError;
+      throw validationError;
+    }
+    if (!formatsMatch) {
+      if (writeError) throw writeError;
+      throw new Error(`Validacao de numberFormat apos escrita falhou: ${sheetTitle}`);
     }
 
     return {
       previous: body.length,
       removed: matched.length,
       inserted: newRows.length,
-      final: body.length - matched.length + newRows.length,
+      final: expectedBodyLength,
     };
   }
 }

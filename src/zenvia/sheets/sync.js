@@ -107,6 +107,30 @@ function numericSheetValue(value, fallback = 0) {
   return number;
 }
 
+function durationSheetValue(value) {
+  const candidate = value === null || value === undefined || value === ""
+    ? "00:00:00"
+    : value;
+  if (typeof candidate === "number") {
+    if (!Number.isFinite(candidate)) throw new Error("Duracao Zenvia invalida");
+    if (candidate === 0) {
+      return GoogleSheets.timeCell("00:00:00", { pattern: "hh:mm:ss" });
+    }
+    return candidate;
+  }
+
+  const text = String(candidate).trim();
+  const match = text.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (match) {
+    const normalized = `${match[1].padStart(2, "0")}:${match[2]}:${match[3]}`;
+    return GoogleSheets.timeCell(normalized, { pattern: "hh:mm:ss" });
+  }
+  if (/^-?\d+(?:[.,]\d+)?$/.test(text)) {
+    return numericSheetValue(text);
+  }
+  throw new Error("Duracao Zenvia em formato inesperado");
+}
+
 async function runIntegration() {
   secureLog(`Iniciando sincronização com filtro`);
   try {
@@ -212,7 +236,7 @@ async function runIntegration() {
         item.status || "", // Status Origem (L)
         item.status || "", // Status Destino (M)
         item.url_gravacao ? "Disponível" : "Não disponível", // Status Gravação (N)
-        numericSheetValue(item.duracao, 0), // Duracao (min) (O)
+        durationSheetValue(item.duracao), // Duracao (O)
         numericSheetValue(item.tempo_espera, 0), // Espera (min) (P)
         numericSheetValue(item.tempo_espera, 0), // Tempo Ring Origem (Q)
         numericSheetValue(item.tempo_espera, 0), // Tempo Ring Destino (R)
@@ -250,6 +274,7 @@ async function runIntegration() {
 
 runIntegration.toSheetDateTime = toSheetDateTime;
 runIntegration.numericSheetValue = numericSheetValue;
+runIntegration.durationSheetValue = durationSheetValue;
 module.exports = runIntegration;
 
 if (require.main === module) {

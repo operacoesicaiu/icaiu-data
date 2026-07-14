@@ -37,3 +37,27 @@ test("Zenvia preserva telefones, duracao e espera como numeros historicos", () =
     /precisao segura/,
   );
 });
+
+test("Zenvia preserva duracao HH:mm:ss como celula TIME historica", () => {
+  const duration = runIntegration.durationSheetValue("00:01:22");
+
+  assert.deepEqual(GoogleSheets.literalCell(duration), {
+    userEnteredValue: { numberValue: Number(duration) },
+    userEnteredFormat: {
+      numberFormat: { type: "TIME", pattern: "hh:mm:ss" },
+    },
+  });
+  assert.deepEqual(
+    GoogleSheets.literalCell(runIntegration.durationSheetValue("")),
+    {
+      userEnteredValue: { numberValue: 0 },
+      userEnteredFormat: {
+        numberFormat: { type: "TIME", pattern: "hh:mm:ss" },
+      },
+    },
+  );
+  assert.throws(
+    () => runIntegration.durationSheetValue("indisponivel"),
+    /formato inesperado/,
+  );
+});

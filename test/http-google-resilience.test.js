@@ -196,35 +196,47 @@ test("appendValues não repete escrita quando a resposta é ambígua", async () 
   assert.equal(requestCount, 1);
 });
 
-test("replaceRows lê somente colunas seletoras e exclui blocos de baixo para cima", async () => {
+test("replaceRows usa seletoras para excluir blocos de baixo para cima", async () => {
   const sheets = createSheets();
   const header = ["Data", "Nome", "Valor", "Empresa"];
   let requestedRanges;
   let update;
-  let reads = 0;
+  let rows = [
+    ["2026-07-01", "Um", 1, "A"],
+    ["2026-07-02", "Dois", 2, "B"],
+    ["2026-07-03", "Tres", 3, "C"],
+    ["2026-07-04", "Quatro", 4, "D"],
+  ];
 
   sheets.getValuesBatch = async (ranges, options = {}) => {
+    if (options.valueRenderOption === "FORMULA") {
+      return [[header, ...rows.map((row) => [...row])]];
+    }
     if (options.valueRenderOption === "UNFORMATTED_VALUE") {
-      return [[["2026-07-05", "Novo", 10, "E"]]];
+      return ranges.map((range) => {
+        const match = range.match(/![A-Z]+(\d+):[A-Z]+(\d+)$/);
+        assert.ok(match);
+        return rows
+          .slice(Number(match[1]) - 2, Number(match[2]) - 1)
+          .map((row) => [...row]);
+      });
     }
     requestedRanges = ranges;
-    reads++;
-    if (reads > 2) {
-      return [
-        [header],
-        [["Data"], ["2026-07-02"], ["2026-07-04"], ["2026-07-05"]],
-        [["Empresa"], ["B"], ["D"], ["E"]],
-      ];
-    }
     return [
       [header],
-      [["Data"], ["2026-07-01"], ["2026-07-02"], ["2026-07-03"], ["2026-07-04"]],
-      [["Empresa"], ["A"], ["B"], ["C"], ["D"]],
+      [[header[0]], ...rows.map((row) => [row[0]])],
+      [[header[3]], ...rows.map((row) => [row[3]])],
     ];
   };
-  sheets.getSheetIdByTitle = async () => ({ "Base Dados": 321 });
+  sheets.getSheetPropertiesByTitle = async () => ({
+    "Base Dados": {
+      sheetId: 321,
+      gridProperties: { rowCount: 1_000, columnCount: header.length },
+    },
+  });
   sheets.batchUpdate = async (requests, options) => {
     update = { requests, options };
+    rows = [rows[1], rows[3], ["2026-07-05", "Novo", 10, "E"]];
     return { ok: true };
   };
 
@@ -260,6 +272,13 @@ test("replaceRows lê somente colunas seletoras e exclui blocos de baixo para ci
     { sheetId: 321, dimension: "ROWS", startIndex: 1, endIndex: 2 },
   ]);
   assert.equal(update.requests.some((request) => request.insertDimension), false);
+  assert.equal(update.requests.some((request) => request.appendCells), false);
+  assert.equal(
+    update.requests.find(
+      (request) => request.updateCells?.range?.startRowIndex === 3,
+    ).updateCells.range.endRowIndex,
+    4,
+  );
   assert.deepEqual(result, { previous: 4, removed: 2, inserted: 1, final: 3 });
 });
 

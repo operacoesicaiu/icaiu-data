@@ -74,33 +74,42 @@ test("hora, mês e texto literal preservam tipo e representação", () => {
   assert.throws(() => GoogleSheets.monthCell("13/2026"), /Mes invalido/);
 });
 
-test("replaceRows compara o serial tipado e mantém o texto para a seletora", async () => {
+test("replaceRows grava valor e formato tipados no mesmo batch atomico", async () => {
   const sheets = createSheets();
   const header = ["Data/Hora", "Valor"];
   const typedDateTime = GoogleSheets.dateTimeCell("14/07/2026 07:47:13");
   const newRows = [[typedDateTime, "NOVO"]];
   const formattedBefore = "14/07/2026 06:00:00";
-  let selectorReads = 0;
   const writes = [];
   let checkedBlocks;
   const selectedValues = [];
+  let applied = false;
 
-  sheets.getSheetIdByTitle = async () => ({ Chamadas: 17 });
+  sheets.getSheetPropertiesByTitle = async () => ({
+    Chamadas: {
+      sheetId: 17,
+      gridProperties: { rowCount: 1_000, columnCount: 2 },
+    },
+  });
   sheets.getValuesBatch = async (_ranges, options = {}) => {
+    if (options.valueRenderOption === "FORMULA") {
+      return [[
+        header,
+        [
+          applied ? Number(typedDateTime) : Number(typedDateTime) - 1 / 24,
+          applied ? "NOVO" : "VELHO",
+        ],
+      ]];
+    }
     if (options.valueRenderOption === "UNFORMATTED_VALUE") {
       return [[[Number(typedDateTime), "NOVO"]]];
     }
-    selectorReads++;
-    const formatted =
-      selectorReads <= 2
-        ? formattedBefore
-        : selectorReads === 3
-          ? Number(typedDateTime)
-          : String(typedDateTime);
+    const formatted = applied ? String(typedDateTime) : formattedBefore;
     return [[header], [[header[0]], [formatted]]];
   };
   sheets.batchUpdate = async (requests, options) => {
     writes.push({ requests, options });
+    applied = true;
     return { ok: true };
   };
   sheets.numberFormatsMatch = async (sheetTitle, blocks) => {
@@ -124,15 +133,19 @@ test("replaceRows compara o serial tipado e mantém o texto para a seletora", as
 
   assert.deepEqual(result, { previous: 1, removed: 1, inserted: 1, final: 1 });
   assert.ok(selectedValues.includes("14/07/2026 07:47:13"));
-  const append = writes[0].requests.find((request) => request.appendCells).appendCells;
-  assert.equal(append.fields, "userEnteredValue");
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].options, { idempotent: false });
+  const write = writes[0].requests.find(
+    (request) => request.updateCells?.range?.startRowIndex === 1,
+  ).updateCells;
+  assert.equal(write.fields, "userEnteredValue");
   assert.deepEqual(
-    append.rows[0].values[0],
+    write.rows[0].values[0],
     { userEnteredValue: { numberValue: Number(typedDateTime) } },
   );
-  assert.equal(append.rows[0].values[0].userEnteredFormat, undefined);
-  assert.deepEqual(writes[1].options, { idempotent: true });
-  assert.deepEqual(writes[1].requests, [
+  assert.equal(write.rows[0].values[0].userEnteredFormat, undefined);
+  assert.deepEqual(
+    writes[0].requests.find((request) => request.repeatCell),
     {
       repeatCell: {
         range: {
@@ -153,36 +166,8 @@ test("replaceRows compara o serial tipado e mantém o texto para a seletora", as
         fields: "userEnteredFormat.numberFormat",
       },
     },
-  ]);
+  );
   assert.equal(checkedBlocks.length, 1);
-});
-
-test("formatação idempotente só aceita resposta ambígua após validar metadados", async () => {
-  const block = {
-    columnIndex: 1,
-    startRowIndex: 4,
-    endRowIndex: 7,
-    numberFormat: { type: "DATE", pattern: "dd/MM/yyyy" },
-  };
-  const ambiguous = new Error("resposta perdida");
-  const applied = createSheets();
-  applied.batchUpdate = async () => {
-    throw ambiguous;
-  };
-  applied.numberFormatsMatch = async () => true;
-  await assert.doesNotReject(() =>
-    applied.applyTypedNumberFormats("Base", 9, [block]),
-  );
-
-  const notApplied = createSheets();
-  notApplied.batchUpdate = async () => {
-    throw ambiguous;
-  };
-  notApplied.numberFormatsMatch = async () => false;
-  await assert.rejects(
-    () => notApplied.applyTypedNumberFormats("Base", 9, [block]),
-    (error) => error === ambiguous,
-  );
 });
 
 test("validação de formato exige type e pattern exatos do includeGridData", async () => {
