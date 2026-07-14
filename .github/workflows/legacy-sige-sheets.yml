@@ -27,11 +27,10 @@ jobs:
       - run: npm ci
       - run: node src/google/run-legacy-sheets.js sige-sync.js
         env:
-          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,SIGE_TOKEN,SIGE_USER,SIGE_APP,SPREADSHEET_ID,ERP_SPREADSHEET_ID
+          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,SIGE_TOKEN,SIGE_USER,SIGE_APP,SPREADSHEET_ID
           GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
           SIGE_TOKEN: ${{ secrets.SIGE_TOKEN }}
           SIGE_USER: ${{ secrets.SIGE_USER }}
           SIGE_APP: ${{ secrets.SIGE_APP }}
           SPREADSHEET_ID: ${{ secrets.SIGE_SPREADSHEET_ID }}
-          ERP_SPREADSHEET_ID: ${{ secrets.SIGE_ERP_SPREADSHEET_ID }}

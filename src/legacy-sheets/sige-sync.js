@@ -137,7 +137,6 @@ async function run() {
       SIGE_APP,
       GOOGLE_TOKEN,
       SPREADSHEET_ID,
-      ERP_SPREADSHEET_ID,
     } = process.env;
 
     const gHeaders = {
@@ -172,7 +171,7 @@ async function run() {
     // ================================
 
     const resErp = await axios.get(
-      `https://sheets.googleapis.com/v4/spreadsheets/${ERP_SPREADSHEET_ID}/values/ERP!A:AH`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/ERP!A:AH`,
       {
         headers: gHeaders,
       },
