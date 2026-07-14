@@ -1,5 +1,10 @@
 const GoogleSheets = require("../../google/sheets");
 const formatPublicError = require("../../lib/public-error");
+const {
+  addDays,
+  isoDay,
+  today: saoPauloToday,
+} = require("../../lib/sao-paulo-date");
 const { listSigeOrdersForDay } = require("../api");
 
 // ================================
@@ -44,10 +49,176 @@ function dateToExcelSerial(dateStr) {
 function parseSheetDate(value) {
   const text = String(value || "").split(" ")[0];
   const br = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (br) return new Date(Number(br[3]), Number(br[2]) - 1, Number(br[1]));
+  if (br) {
+    return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1])));
+  }
   const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  if (iso) {
+    return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
+  }
   return null;
+}
+
+function digitsToNumber(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return value;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) {
+    throw new Error("Identificador numerico SIGE excede a precisao segura");
+  }
+  return number;
+}
+
+const DOCUMENT_COLUMN_INDEX = 9;
+const FATURAMENTO_COLUMN_COUNT = 18;
+
+function documentKey(row) {
+  return String(row?.[DOCUMENT_COLUMN_INDEX] ?? "");
+}
+
+function isFaturamentoRowInWindow(row, startDate, endDate) {
+  const date = parseSheetDate(row?.[3]);
+  return Boolean(date && date >= startDate && date <= endDate);
+}
+
+function dedupeDocumentRowsKeepLast(rows) {
+  const seen = new Set();
+  const reversed = [];
+
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index];
+    const document = documentKey(row);
+    if (!document || seen.has(document)) continue;
+    seen.add(document);
+    reversed.push(row);
+  }
+
+  return reversed.reverse();
+}
+
+function duplicateDocumentIndexes(documents) {
+  const seen = new Set();
+  const duplicates = [];
+
+  for (let index = documents.length - 1; index >= 0; index--) {
+    const document = String(documents[index] ?? "");
+    if (!document) continue;
+    if (seen.has(document)) duplicates.push(index);
+    else seen.add(document);
+  }
+
+  return duplicates.sort((left, right) => left - right);
+}
+
+function contiguousBlocks(indexes) {
+  const blocks = [];
+  for (const index of indexes) {
+    const last = blocks.at(-1);
+    if (last && last.end === index) last.end = index + 1;
+    else blocks.push({ start: index, end: index + 1 });
+  }
+  return blocks;
+}
+
+function documentDeleteRequests(sheetId, duplicateIndexes) {
+  return contiguousBlocks(duplicateIndexes)
+    .reverse()
+    .map((block) => ({
+      deleteDimension: {
+        range: {
+          sheetId,
+          dimension: "ROWS",
+          // Data index zero is physical row 2; grid indexes are zero-based.
+          startIndex: block.start + 1,
+          endIndex: block.end + 1,
+        },
+      },
+    }));
+}
+
+function normalizeFaturamentoSnapshot(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) =>
+    Array.from({ length: FATURAMENTO_COLUMN_COUNT }, (_, columnIndex) => {
+      const value = Array.isArray(row) ? row[columnIndex] : undefined;
+      return value === undefined || value === null ? "" : value;
+    }),
+  );
+}
+
+function sameFaturamentoSnapshot(left, right) {
+  return (
+    left.length === right.length &&
+    left.every((leftRow, rowIndex) =>
+      leftRow.every((value, columnIndex) =>
+        Object.is(value, right[rowIndex]?.[columnIndex]),
+      ),
+    )
+  );
+}
+
+async function readFaturamentoSnapshot(sheets) {
+  const [rows = []] = await sheets.getValuesBatch(["Faturamento!A2:R"], {
+    valueRenderOption: "FORMULA",
+    dateTimeRenderOption: "SERIAL_NUMBER",
+  });
+  return normalizeFaturamentoSnapshot(rows);
+}
+
+async function cleanupGlobalDocumentDuplicates(sheets) {
+  const initialRows = await readFaturamentoSnapshot(sheets);
+  const duplicateIndexes = duplicateDocumentIndexes(
+    initialRows.map(documentKey),
+  );
+  if (!duplicateIndexes.length) {
+    return {
+      previous: initialRows.length,
+      removed: 0,
+      final: initialRows.length,
+      recoveredAmbiguousWrite: false,
+    };
+  }
+
+  const sheetIds = await sheets.getSheetIdByTitle();
+  const sheetId = sheetIds.Faturamento;
+  if (sheetId === undefined) throw new Error("Aba nao encontrada: Faturamento");
+
+  const preWriteRows = await readFaturamentoSnapshot(sheets);
+  if (!sameFaturamentoSnapshot(initialRows, preWriteRows)) {
+    throw new Error(
+      "Aba Faturamento mudou antes da deduplicacao global; exclusao cancelada com seguranca",
+    );
+  }
+
+  const duplicateSet = new Set(duplicateIndexes);
+  const expectedRows = preWriteRows.filter(
+    (_, index) => !duplicateSet.has(index),
+  );
+  const requests = documentDeleteRequests(sheetId, duplicateIndexes);
+  let writeError;
+  try {
+    await sheets.batchUpdate(requests, { idempotent: false });
+  } catch (error) {
+    writeError = error;
+  }
+
+  let finalRows;
+  try {
+    finalRows = await readFaturamentoSnapshot(sheets);
+  } catch (validationError) {
+    if (writeError) throw writeError;
+    throw validationError;
+  }
+
+  if (!sameFaturamentoSnapshot(finalRows, expectedRows)) {
+    if (writeError) throw writeError;
+    throw new Error("Validacao da deduplicacao global de Faturamento falhou");
+  }
+
+  return {
+    previous: preWriteRows.length,
+    removed: duplicateIndexes.length,
+    final: finalRows.length,
+    recoveredAmbiguousWrite: Boolean(writeError),
+  };
 }
 
 function normalizeHeader(value) {
@@ -113,14 +284,9 @@ async function run() {
     // RANGE DE DATAS
     // ================================
 
-    const hoje = new Date();
-    hoje.setHours(0, 0, 0, 0);
-
-    const ontem = new Date(hoje);
-    ontem.setDate(hoje.getDate() - 1);
-
-    const inicio = new Date(hoje);
-    inicio.setDate(hoje.getDate() - DIAS_REPROCESSAR);
+    const hoje = saoPauloToday();
+    const ontem = addDays(hoje, -1);
+    const inicio = addDays(hoje, -DIAS_REPROCESSAR);
 
     secureLog(`Reprocessando últimos ${DIAS_REPROCESSAR} dias.`);
 
@@ -153,7 +319,7 @@ async function run() {
     const collectedRows = [];
 
     while (dataAtual <= ontem) {
-      const dataBusca = dataAtual.toISOString().split("T")[0];
+      const dataBusca = isoDay(dataAtual);
 
       secureLog(`Processando ${dataBusca}`);
 
@@ -162,7 +328,7 @@ async function run() {
       if (pedidos.length === 0) {
         secureLog(`Nenhum pedido encontrado em ${dataBusca}`);
 
-        dataAtual.setDate(dataAtual.getDate() + 1);
+        dataAtual = addDays(dataAtual, 1);
 
         await sleep(3000);
 
@@ -233,21 +399,26 @@ async function run() {
           "",
           p.Codigo,
           p.StatusSistema || "",
-          formatarDataBR(dataVenda),
+          GoogleSheets.dateCell(formatarDataBR(dataVenda), {
+            pattern: "dd/MM/yyyy",
+          }),
           p.Cliente || "",
           "",
           p.ClienteEmail || "",
           valorTotal,
           p.Vendedor || "",
           `Pedido ${p.Codigo}`,
-          clienteCpf,
+          digitsToNumber(clienteCpf),
           displayNovo,
           respNovo,
           serialRetirada !== "" ? valorTotal * 0.5 : valorTotal,
           displayRetirada,
           respRetirada,
           serialRetirada !== "" ? valorTotal * 0.5 : 0,
-          `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}`,
+          GoogleSheets.monthCell(
+            `${String(dataVenda.getMonth() + 1).padStart(2, "0")}/${dataVenda.getFullYear()}`,
+            { pattern: "m/yyyy" },
+          ),
         ]);
       }
 
@@ -258,7 +429,7 @@ async function run() {
       collectedRows.push(...rowsFinal);
       secureLog(`${rowsFinal.length} registros adicionados (${dataBusca})`);
 
-      dataAtual.setDate(dataAtual.getDate() + 1);
+      dataAtual = addDays(dataAtual, 1);
 
       await sleep(4000);
     }
@@ -267,24 +438,35 @@ async function run() {
     // REMOVE DUPLICADOS
     // ================================
 
-    const uniqueRows = [
-      ...new Map(
-        collectedRows.map((row) => [String(row[9] || ""), row]),
-      ).values(),
-    ];
+    const missingDocumentIndex = collectedRows.findIndex((row) => !documentKey(row));
+    if (missingDocumentIndex !== -1) {
+      throw new Error(
+        `Registro SIGE sem documento na coluna J: collectedRows[${missingDocumentIndex}]`,
+      );
+    }
+    const uniqueRows = dedupeDocumentRowsKeepLast(collectedRows);
+    const latestHeader = (await sheets.getValues("Faturamento!A1:R1"))[0] || [];
+    validateFaturamentoHeader(latestHeader);
+    secureLog(
+      `Deduplicacao SIGE na coleta: repetidos removidos=${collectedRows.length - uniqueRows.length}.`,
+    );
     const result = await sheets.replaceRows({
       sheetTitle: "Faturamento",
       columnRange: "A:R",
-      header: currentHeader,
+      header: latestHeader,
       newRows: uniqueRows,
       matchColumnIndexes: [3],
-      shouldReplace: (row) => {
-        const date = parseSheetDate(row[3]);
-        return date && date >= inicio && date <= ontem;
-      },
+      shouldReplace: (row) => isFaturamentoRowInWindow(row, inicio, ontem),
     });
     secureLog(
       `${result.removed} registros substituidos por ${result.inserted}.`,
+    );
+
+    const cleanup = await cleanupGlobalDocumentDuplicates(sheets);
+    secureLog(
+      `Deduplicacao SIGE global: ${cleanup.removed} linhas anteriores removidas${
+        cleanup.recoveredAmbiguousWrite ? " apos validacao de resposta ambigua" : ""
+      }.`,
     );
 
     secureLog("Processo finalizado com sucesso.");
@@ -296,6 +478,12 @@ async function run() {
 
 module.exports = run;
 module.exports.validateFaturamentoHeader = validateFaturamentoHeader;
+module.exports.digitsToNumber = digitsToNumber;
+module.exports.dedupeDocumentRowsKeepLast = dedupeDocumentRowsKeepLast;
+module.exports.cleanupGlobalDocumentDuplicates = cleanupGlobalDocumentDuplicates;
+module.exports.documentDeleteRequests = documentDeleteRequests;
+module.exports.duplicateDocumentIndexes = duplicateDocumentIndexes;
+module.exports.isFaturamentoRowInWindow = isFaturamentoRowInWindow;
 
 if (require.main === module) {
   run().catch(() => {

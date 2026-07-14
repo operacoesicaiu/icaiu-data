@@ -65,12 +65,13 @@ function validateEnvironment() {
   }
 }
 
-const formatarParaBR = (dataISO) => {
+const toSheetDateTime = (dataISO) => {
   if (!dataISO || dataISO === "null" || dataISO === "") return "";
+  let displayValue;
   try {
     const data = new Date(dataISO);
     if (isNaN(data.getTime())) return dataISO;
-    return data
+    displayValue = data
       .toLocaleString("pt-BR", {
         timeZone: "America/Sao_Paulo",
         day: "2-digit",
@@ -84,7 +85,27 @@ const formatarParaBR = (dataISO) => {
   } catch (e) {
     return dataISO;
   }
+  return GoogleSheets.dateTimeCell(displayValue);
 };
+
+function numericSheetValue(value, fallback = 0) {
+  const candidate = value === null || value === undefined || value === ""
+    ? fallback
+    : value;
+  if (typeof candidate === "number") {
+    if (!Number.isFinite(candidate)) throw new Error("Numero Zenvia invalido");
+    return candidate;
+  }
+  if (typeof candidate !== "string") return candidate;
+  const text = candidate.trim();
+  if (!/^-?\d+(?:[.,]\d+)?$/.test(text)) return candidate;
+  const number = Number(text.replace(",", "."));
+  if (!Number.isFinite(number)) throw new Error("Numero Zenvia invalido");
+  if (!text.includes(".") && !text.includes(",") && !Number.isSafeInteger(number)) {
+    throw new Error("Inteiro Zenvia excede a precisao segura");
+  }
+  return number;
+}
 
 async function runIntegration() {
   secureLog(`Iniciando sincronização com filtro`);
@@ -178,24 +199,24 @@ async function runIntegration() {
 
       return [
         item.id || "", // ID (A)
-        formatarParaBR(item.data_inicio), // Data/Hora (B)
-        formatarParaBR(item.data_inicio), // Data/Hora Início Origem (C)
-        formatarParaBR(fila_data_inicio), // Data/Hora Fim Origem (D)
-        formatarParaBR(fila_data_inicio), // Data/Hora Início Destino (E)
-        formatarParaBR(fila_data_inicio), // Data/Hora Fim Destino (F)
-        item.numero_origem || "", // Origem (G)
-        item.numero_destino || "", // Destino (H)
+        toSheetDateTime(item.data_inicio), // Data/Hora (B)
+        toSheetDateTime(item.data_inicio), // Data/Hora Início Origem (C)
+        toSheetDateTime(fila_data_inicio), // Data/Hora Fim Origem (D)
+        toSheetDateTime(fila_data_inicio), // Data/Hora Início Destino (E)
+        toSheetDateTime(fila_data_inicio), // Data/Hora Fim Destino (F)
+        item.numero_origem ? numericSheetValue(item.numero_origem, "") : "", // Origem (G)
+        item.numero_destino ? numericSheetValue(item.numero_destino, "") : "", // Destino (H)
         ramal_numero, // RAMAL (I)
         ramal_numero, // Agente Ramal (J)
         item.status || "", // Status (K)
         item.status || "", // Status Origem (L)
         item.status || "", // Status Destino (M)
         item.url_gravacao ? "Disponível" : "Não disponível", // Status Gravação (N)
-        item.duracao || "0", // Duracao (min) (O)
-        item.tempo_espera || "0", // Espera (min) (P)
-        item.tempo_espera || "0", // Tempo Ring Origem (Q)
-        item.tempo_espera || "0", // Tempo Ring Destino (R)
-        item.tempo_espera || "0", // Tempo Espera Fila (S)
+        numericSheetValue(item.duracao, 0), // Duracao (min) (O)
+        numericSheetValue(item.tempo_espera, 0), // Espera (min) (P)
+        numericSheetValue(item.tempo_espera, 0), // Tempo Ring Origem (Q)
+        numericSheetValue(item.tempo_espera, 0), // Tempo Ring Destino (R)
+        numericSheetValue(item.tempo_espera, 0), // Tempo Espera Fila (S)
         atendida, // Motivo Desconexao Origem (T)
         atendida, // Motivo Desconexao Destino (U)
         item.ramal?.id || "", // Ramal ID Origem (X)
@@ -227,6 +248,8 @@ async function runIntegration() {
   }
 }
 
+runIntegration.toSheetDateTime = toSheetDateTime;
+runIntegration.numericSheetValue = numericSheetValue;
 module.exports = runIntegration;
 
 if (require.main === module) {

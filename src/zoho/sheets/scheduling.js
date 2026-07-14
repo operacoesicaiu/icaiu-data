@@ -3,6 +3,13 @@ const { createIdPageTracker } = require("../../lib/page-progress");
 const formatPublicError = require("../../lib/public-error");
 const createZohoClient = require("../api");
 const { extractZohoRecords } = require("../response");
+const {
+  digitsToNumber,
+  toDateCell,
+  toDateTimeCell,
+  toMonthCell,
+  toTimeCell,
+} = require("./value-types");
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -54,6 +61,25 @@ function parseSheetDate(value) {
     if (month >= 0) return new Date(Date.UTC(Number(match[3]), month, Number(match[1])));
   }
   return null;
+}
+
+function applySchedulingTypes(row) {
+  if (!Array.isArray(row) || row.length !== 34) {
+    throw new Error("Zoho Scheduling gerou linha com largura diferente de 34");
+  }
+  const typed = [...row];
+  typed[0] = digitsToNumber(typed[0]);
+  typed[3] = GoogleSheets.textCell(typed[3]);
+  typed[4] = toDateTimeCell(typed[4], { pattern: "dd-mm-yyyy hh:mm" });
+  typed[5] = toDateTimeCell(typed[5], { pattern: "dd-mm-yyyy hh:mm" });
+  typed[12] = toDateTimeCell(typed[12], { pattern: "dd/MM/yyyy HH:mm:ss" });
+  typed[16] = GoogleSheets.textCell(typed[16]);
+  typed[17] = toDateCell(typed[17], { pattern: "dd/MM/yyyy" });
+  typed[18] = toTimeCell(typed[18], { pattern: "HH:mm:ss" });
+  typed[19] = toDateCell(typed[19], { pattern: "dd/MM/yyyy" });
+  typed[20] = toTimeCell(typed[20], { pattern: "HH:mm:ss" });
+  typed[33] = toMonthCell(typed[33], { pattern: "mm/yyyy" });
+  return typed;
 }
 
 async function run() {
@@ -157,18 +183,13 @@ async function run() {
       const dayE = (E || "").split(" ")[0] || "";
       const columnR = dayM.split("-").join("/");
       const columnT = dayE.split("-").join("/");
-      let serialT = "";
-      if (dayE) {
-        const parsed = new Date(dayE);
-        if (!Number.isNaN(parsed.getTime())) {
-          serialT = Math.floor((parsed - new Date(1899, 11, 30)) / 86400000);
-        }
-      }
+      const typedColumnT = toDateCell(dayE);
+      const serialT = typedColumnT === "" ? "" : Math.floor(Number(typedColumnT));
 
       row[0] = A;
       row[3] = D;
       row[5] = F;
-      return [
+      return applySchedulingTypes([
         ...row,
         dictionary[N] || "",
         `${serialT}${D}`,
@@ -189,7 +210,7 @@ async function run() {
         B === "Cliente realizou o serviço" ? 1 : 0,
         0,
         columnR.includes("/") ? `${columnR.split("/")[1]}/${columnR.split("/")[2]}` : "",
-      ];
+      ]);
     });
     if (finalData.some((row) => row.length !== 34)) {
       throw new Error("Zoho Scheduling gerou linha com largura diferente de 34");
@@ -213,6 +234,7 @@ async function run() {
   }
 }
 
+run.applySchedulingTypes = applySchedulingTypes;
 module.exports = run;
 
 if (require.main === module) {

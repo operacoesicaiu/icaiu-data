@@ -3,6 +3,7 @@ const { createIdPageTracker } = require("../../lib/page-progress");
 const formatPublicError = require("../../lib/public-error");
 const createZohoClient = require("../api");
 const { extractZohoRecords } = require("../response");
+const { digitsToNumber, toDateTimeCell } = require("./value-types");
 
 // Função para registrar eventos sem expor dados sensíveis
 function secureLog(message, isError = false) {
@@ -16,14 +17,34 @@ function secureLog(message, isError = false) {
 function extractValue(value) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "object" && !Array.isArray(value)) {
-    return value.display_value || value.ID || String(value);
+    const extracted = value.display_value ?? value.ID;
+    if (extracted === null || extracted === undefined || extracted === "") {
+      return String(value);
+    }
+    return typeof extracted === "number" || typeof extracted === "boolean"
+      ? extracted
+      : String(extracted);
   }
   if (Array.isArray(value)) {
     return value
       .map((v) => (typeof v === "object" ? v.display_value || v : v))
       .join(", ");
   }
+  if (typeof value === "number" || typeof value === "boolean") return value;
   return String(value);
+}
+
+function applyLeadTypes(row) {
+  const typed = [...row];
+  typed[1] = digitsToNumber(typed[1]);
+  typed[5] = digitsToNumber(typed[5]);
+  typed[17] = toDateTimeCell(typed[17], {
+    pattern: "dd-mm-yyyy hh:mm:ss",
+  });
+  typed[22] = toDateTimeCell(typed[22], {
+    pattern: "dd/MM/yyyy HH:mm:ss",
+  });
+  return typed;
 }
 
 function dateInSaoPaulo(daysAgo) {
@@ -153,7 +174,7 @@ async function run() {
           const row = Object.values(mapping).map((zohoKey) =>
             extractValue(record[zohoKey]),
           );
-          allProcessed.push(row);
+          allProcessed.push(applyLeadTypes(row));
         });
 
         if (data.length < limit) break; // Se veio menos que o limite, acabou a base
@@ -193,6 +214,8 @@ async function run() {
   }
 }
 
+run.applyLeadTypes = applyLeadTypes;
+run.extractValue = extractValue;
 module.exports = run;
 
 if (require.main === module) {

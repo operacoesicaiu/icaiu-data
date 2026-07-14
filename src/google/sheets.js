@@ -4,6 +4,26 @@ const { getGoogleAccessToken } = require("./auth");
 const { backoffMs, isRetryableNetworkError, isRetryableStatus, sleep } = require("../lib/http-retry");
 
 const SHEETS_BASE_URL = "https://sheets.googleapis.com/v4/spreadsheets";
+const GOOGLE_SHEETS_EPOCH_MS = Date.UTC(1899, 11, 30);
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const TYPED_DATE_CELL = Symbol("typedDateCell");
+const TYPED_DATE_TEXT = Symbol("typedDateText");
+
+class TypedDateCell {
+  constructor(text, metadata) {
+    this[TYPED_DATE_TEXT] = text;
+    this[TYPED_DATE_CELL] = metadata;
+    Object.freeze(this);
+  }
+
+  toString() {
+    return this[TYPED_DATE_TEXT];
+  }
+
+  valueOf() {
+    return this[TYPED_DATE_CELL].numberValue;
+  }
+}
 
 function encodeRange(range) {
   return encodeURIComponent(range).replace(/%21/g, "!");
@@ -14,13 +34,146 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function dateParts(text, withTime) {
+  const pattern = withTime
+    ? /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/
+    : /^(\d{2})\/(\d{2})\/(\d{4})$/;
+  const match = String(text).match(pattern);
+  if (!match) return null;
+
+  const [, dayText, monthText, yearText, hourText = "0", minuteText = "0", secondText = "0"] = match;
+  const parts = {
+    day: Number(dayText),
+    month: Number(monthText),
+    year: Number(yearText),
+    hour: Number(hourText),
+    minute: Number(minuteText),
+    second: Number(secondText),
+  };
+  if (
+    parts.year < 1900 ||
+    parts.month < 1 ||
+    parts.month > 12 ||
+    parts.day < 1 ||
+    parts.day > 31 ||
+    parts.hour > 23 ||
+    parts.minute > 59 ||
+    parts.second > 59
+  ) return null;
+
+  const timestamp = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  const parsed = new Date(timestamp);
+  if (
+    parsed.getUTCFullYear() !== parts.year ||
+    parsed.getUTCMonth() !== parts.month - 1 ||
+    parsed.getUTCDate() !== parts.day ||
+    parsed.getUTCHours() !== parts.hour ||
+    parsed.getUTCMinutes() !== parts.minute ||
+    parsed.getUTCSeconds() !== parts.second
+  ) return null;
+  return { ...parts, timestamp };
+}
+
+function typedNumberCell(text, numberValue, numberFormat) {
+  const metadata = Object.freeze({
+    numberValue,
+    numberFormat: Object.freeze(numberFormat),
+  });
+  return new TypedDateCell(text, metadata);
+}
+
+function typedDateCell(value, { withTime, pattern }) {
+  if (value === null || value === undefined || value === "") return "";
+  const text = String(value);
+  const parts = dateParts(text, withTime);
+  const expected = withTime ? "DD/MM/AAAA HH:mm:ss" : "DD/MM/AAAA";
+  if (!parts) throw new Error(`Data invalida para Google Sheets; esperado ${expected}`);
+
+  return typedNumberCell(
+    text,
+    (parts.timestamp - GOOGLE_SHEETS_EPOCH_MS) / MILLISECONDS_PER_DAY,
+    { type: withTime ? "DATE_TIME" : "DATE", pattern },
+  );
+}
+
+function dateCell(value, { pattern = "dd/mm/yyyy" } = {}) {
+  return typedDateCell(value, { withTime: false, pattern });
+}
+
+function dateTimeCell(value, { pattern = "dd/mm/yyyy hh:mm:ss" } = {}) {
+  return typedDateCell(value, { withTime: true, pattern });
+}
+
+function timeCell(value, { pattern = "hh:mm:ss" } = {}) {
+  if (value === null || value === undefined || value === "") return "";
+  const text = String(value);
+  const match = text.match(/^(\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) throw new Error("Hora invalida para Google Sheets; esperado HH:mm:ss");
+  const [, hourText, minuteText, secondText] = match;
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (hour > 23 || minute > 59 || second > 59) {
+    throw new Error("Hora invalida para Google Sheets; esperado HH:mm:ss");
+  }
+  const numberValue = (hour * 3600 + minute * 60 + second) / 86400;
+  return typedNumberCell(text, numberValue, { type: "TIME", pattern });
+}
+
+function monthCell(value, { pattern = "mm/yyyy" } = {}) {
+  if (value === null || value === undefined || value === "") return "";
+  const text = String(value);
+  const match = text.match(/^(\d{2})\/(\d{4})$/);
+  if (!match) throw new Error("Mes invalido para Google Sheets; esperado MM/AAAA");
+  const month = Number(match[1]);
+  const year = Number(match[2]);
+  if (year < 1900 || month < 1 || month > 12) {
+    throw new Error("Mes invalido para Google Sheets; esperado MM/AAAA");
+  }
+  const timestamp = Date.UTC(year, month - 1, 1);
+  return typedNumberCell(
+    text,
+    (timestamp - GOOGLE_SHEETS_EPOCH_MS) / MILLISECONDS_PER_DAY,
+    { type: "DATE", pattern },
+  );
+}
+
+function textCell(value) {
+  return value === null || value === undefined || value === "" ? "" : String(value);
+}
+
+function typedDateMetadata(value) {
+  return value && typeof value === "object" ? value[TYPED_DATE_CELL] : null;
+}
+
 function literalCell(value) {
+  const typedDate = typedDateMetadata(value);
+  if (typedDate) {
+    return {
+      userEnteredValue: { numberValue: typedDate.numberValue },
+      userEnteredFormat: { numberFormat: typedDate.numberFormat },
+    };
+  }
   if (value === null || value === undefined || value === "") return {};
   if (typeof value === "number")
     return { userEnteredValue: { numberValue: value } };
   if (typeof value === "boolean")
     return { userEnteredValue: { boolValue: value } };
   return { userEnteredValue: { stringValue: String(value) } };
+}
+
+function literalValueCell(value) {
+  const cell = literalCell(value);
+  return cell.userEnteredValue
+    ? { userEnteredValue: cell.userEnteredValue }
+    : {};
 }
 
 function columnLetter(index) {
@@ -43,6 +196,8 @@ function columnIndex(letters) {
 }
 
 function canonicalCell(value) {
+  const typedDate = typedDateMetadata(value);
+  if (typedDate) return canonicalCell(typedDate.numberValue);
   if (value === null || value === undefined || value === "") return ["empty"];
   if (typeof value === "number") {
     return ["number", Number.isFinite(value) ? (Object.is(value, -0) ? 0 : value) : String(value)];
@@ -89,6 +244,75 @@ function contiguousBlocks(indexes) {
     else blocks.push({ start: index, end: index + 1 });
   }
   return blocks;
+}
+
+function typedNumberFormatBlocks(newRows, bodyIndexes, stateHasHeader) {
+  const grouped = new Map();
+  newRows.forEach((row, rowOffset) => {
+    const bodyIndex = bodyIndexes[rowOffset];
+    const gridRowIndex = bodyIndex + (stateHasHeader ? 1 : 0);
+    row.forEach((value, columnIndex) => {
+      const metadata = typedDateMetadata(value);
+      if (!metadata) return;
+      const { type, pattern } = metadata.numberFormat;
+      const key = JSON.stringify([columnIndex, type, pattern]);
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          columnIndex,
+          numberFormat: { type, pattern },
+          rowIndexes: [],
+        });
+      }
+      grouped.get(key).rowIndexes.push(gridRowIndex);
+    });
+  });
+
+  const blocks = [];
+  for (const group of grouped.values()) {
+    for (const block of contiguousBlocks(group.rowIndexes)) {
+      blocks.push({
+        columnIndex: group.columnIndex,
+        startRowIndex: block.start,
+        endRowIndex: block.end,
+        numberFormat: group.numberFormat,
+      });
+    }
+  }
+  return blocks.sort(
+    (left, right) =>
+      left.columnIndex - right.columnIndex ||
+      left.startRowIndex - right.startRowIndex,
+  );
+}
+
+function numberFormatRequest(sheetId, block) {
+  return {
+    repeatCell: {
+      range: {
+        sheetId,
+        startRowIndex: block.startRowIndex,
+        endRowIndex: block.endRowIndex,
+        startColumnIndex: block.columnIndex,
+        endColumnIndex: block.columnIndex + 1,
+      },
+      cell: {
+        userEnteredFormat: { numberFormat: block.numberFormat },
+      },
+      fields: "userEnteredFormat.numberFormat",
+    },
+  };
+}
+
+function numberFormatRange(quotedTitle, block) {
+  const column = columnLetter(block.columnIndex);
+  return (
+    `${quotedTitle}!${column}${block.startRowIndex + 1}:` +
+    `${column}${block.endRowIndex}`
+  );
+}
+
+function sameNumberFormat(actual, expected) {
+  return actual?.type === expected.type && actual?.pattern === expected.pattern;
 }
 
 class GoogleSheets {
@@ -233,6 +457,84 @@ class GoogleSheets {
       },
     );
     return (response.data.valueRanges || []).map((item) => item.values || []);
+  }
+
+  async numberFormatsMatch(sheetTitle, blocks) {
+    if (!blocks.length) return true;
+    const quotedTitle = `'${sheetTitle.replace(/'/g, "''")}'`;
+
+    for (let start = 0; start < blocks.length; start += 100) {
+      const chunk = blocks.slice(start, start + 100);
+      const params = new URLSearchParams({
+        includeGridData: "true",
+        fields:
+          "sheets.data(startRow,startColumn," +
+          "rowData.values.userEnteredFormat.numberFormat)",
+      });
+      for (const block of chunk) {
+        params.append("ranges", numberFormatRange(quotedTitle, block));
+      }
+
+      const response = await this.request(
+        {
+          method: "get",
+          url: "",
+          params,
+          timeout: 180000,
+        },
+        {
+          maxAttempts: 5,
+          operation: `validar numberFormat(${chunk.length} ranges)`,
+        },
+      );
+      const gridByStart = new Map();
+      for (const sheet of response.data.sheets || []) {
+        for (const grid of sheet.data || []) {
+          const key = `${grid.startRow || 0}:${grid.startColumn || 0}`;
+          gridByStart.set(key, grid);
+        }
+      }
+
+      for (const block of chunk) {
+        const key = `${block.startRowIndex}:${block.columnIndex}`;
+        const grid = gridByStart.get(key);
+        const rowCount = block.endRowIndex - block.startRowIndex;
+        for (let offset = 0; offset < rowCount; offset++) {
+          const actual =
+            grid?.rowData?.[offset]?.values?.[0]?.userEnteredFormat
+              ?.numberFormat;
+          if (!sameNumberFormat(actual, block.numberFormat)) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  async applyTypedNumberFormats(sheetTitle, sheetId, blocks) {
+    if (!blocks.length) return;
+    let writeError;
+    for (let start = 0; start < blocks.length; start += 500) {
+      const requests = blocks
+        .slice(start, start + 500)
+        .map((block) => numberFormatRequest(sheetId, block));
+      try {
+        await this.batchUpdate(requests, { idempotent: true });
+      } catch (error) {
+        writeError ||= error;
+      }
+    }
+
+    let formatsMatch;
+    try {
+      formatsMatch = await this.numberFormatsMatch(sheetTitle, blocks);
+    } catch (validationError) {
+      if (writeError) throw writeError;
+      throw validationError;
+    }
+    if (!formatsMatch) {
+      if (writeError) throw writeError;
+      throw new Error(`Validacao de numberFormat apos escrita falhou: ${sheetTitle}`);
+    }
   }
 
   async batchUpdate(requests, { idempotent = false } = {}) {
@@ -430,7 +732,7 @@ class GoogleSheets {
       requests.push({
         appendCells: {
           sheetId,
-          rows: newRows.map((row) => ({ values: row.map(literalCell) })),
+          rows: newRows.map((row) => ({ values: row.map(literalValueCell) })),
           fields: "userEnteredValue",
         },
       });
@@ -441,13 +743,66 @@ class GoogleSheets {
       writeError = error;
     }
 
-    let after;
+    let afterValues;
     try {
-      after = await readState();
+      afterValues = await readState();
     } catch (validationReadError) {
       if (writeError) throw writeError;
       throw validationReadError;
     }
+    const expectedBodyLength = body.length - matched.length + newRows.length;
+    const appendedStartIndex = afterValues.body.length - newRows.length;
+    const appendedIndexes = Array.from(
+      { length: newRows.length },
+      (_, index) => appendedStartIndex + index,
+    );
+    const appendedIndexSet = new Set(appendedIndexes);
+    const nonTargetAfterValues = afterValues.body.filter(
+      (_, index) => !appendedIndexSet.has(index),
+    );
+    const headerMatchesBeforeFormat =
+      afterValues.hasHeader &&
+      completeRowsHash([afterValues.first], comparisonWidth) ===
+        completeRowsHash([header], comparisonWidth);
+    const nonTargetMatchesBeforeFormat =
+      selectedRowsHash(nonTargetAfterValues, matchColumnIndexes, {
+        omitEmpty: true,
+      }) ===
+      nonTargetHashBefore;
+
+    let appendedRowsAfter;
+    try {
+      appendedRowsAfter = await readCompleteRowsAtIndexes(
+        appendedIndexes,
+        afterValues.hasHeader,
+      );
+    } catch (validationReadError) {
+      if (writeError) throw writeError;
+      throw validationReadError;
+    }
+    const appendedValuesMatch =
+      appendedStartIndex >= 0 &&
+      afterValues.body.length === expectedBodyLength &&
+      completeRowsHash(appendedRowsAfter, comparisonWidth) ===
+        completeRowsHash(newRows, comparisonWidth);
+
+    if (
+      !headerMatchesBeforeFormat ||
+      !nonTargetMatchesBeforeFormat ||
+      !appendedValuesMatch
+    ) {
+      if (writeError) throw writeError;
+      throw new Error(`Validacao completa apos escrita falhou: ${sheetTitle}`);
+    }
+
+    const formatBlocks = typedNumberFormatBlocks(
+      newRows,
+      appendedIndexes,
+      afterValues.hasHeader,
+    );
+    await this.applyTypedNumberFormats(sheetTitle, sheetId, formatBlocks);
+
+    const after = await readState();
     const targetIndexesAfter = after.body
       .map((row, index) => (shouldReplace(row, index) ? index : null))
       .filter((index) => index !== null);
@@ -455,6 +810,11 @@ class GoogleSheets {
     const nonTargetAfter = after.body.filter(
       (_, index) => !targetIndexSetAfter.has(index),
     );
+    const targetIndexesMatch =
+      targetIndexesAfter.length === appendedIndexes.length &&
+      targetIndexesAfter.every(
+        (value, index) => value === appendedIndexes[index],
+      );
     const headerMatchesCompletely =
       after.hasHeader &&
       completeRowsHash([after.first], comparisonWidth) ===
@@ -462,26 +822,20 @@ class GoogleSheets {
     const nonTargetMatches =
       selectedRowsHash(nonTargetAfter, matchColumnIndexes, { omitEmpty: true }) ===
       nonTargetHashBefore;
-
-    let completeRowsAfter;
-    try {
-      completeRowsAfter = await readCompleteRowsAtIndexes(
-        targetIndexesAfter,
-        after.hasHeader,
-      );
-    } catch (validationReadError) {
-      if (writeError) throw writeError;
-      throw validationReadError;
-    }
+    const completeRowsAfter = await readCompleteRowsAtIndexes(
+      targetIndexesAfter,
+      after.hasHeader,
+    );
     const targetMatchesCompletely =
-      targetIndexesAfter.length === newRows.length &&
+      targetIndexesMatch &&
+      after.body.length === expectedBodyLength &&
       completeRowsHash(completeRowsAfter, comparisonWidth) ===
         completeRowsHash(newRows, comparisonWidth);
 
     if (!headerMatchesCompletely || !nonTargetMatches || !targetMatchesCompletely) {
-      if (writeError) throw writeError;
-      throw new Error(`Validacao completa apos escrita falhou: ${sheetTitle}`);
+      throw new Error(`Validacao completa apos formatacao falhou: ${sheetTitle}`);
     }
+
     return {
       previous: body.length,
       removed: matched.length,
@@ -492,5 +846,10 @@ class GoogleSheets {
 }
 
 GoogleSheets.literalCell = literalCell;
+GoogleSheets.dateCell = dateCell;
+GoogleSheets.dateTimeCell = dateTimeCell;
+GoogleSheets.timeCell = timeCell;
+GoogleSheets.monthCell = monthCell;
+GoogleSheets.textCell = textCell;
 
 module.exports = GoogleSheets;

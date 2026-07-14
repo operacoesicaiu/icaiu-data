@@ -68,7 +68,6 @@ const CLIENT_HEADERS = [
   "Avaliação Negativa",
   "Outros Campos",
   "Usuários Relacionados",
-  "description",
 ];
 
 const CLIENT_CUSTOM_FIELD_IDS = [
@@ -92,6 +91,14 @@ function parseBrazilianDateKey(value) {
   const match = String(value || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (!match) return null;
   return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+}
+
+function shouldReplaceCardRow(row, cardIds, cutoffDay) {
+  const createdDay = parseBrazilianDateKey(row[1]);
+  return (
+    cardIds.has(String(row[14] || "")) ||
+    Boolean(createdDay && createdDay >= cutoffDay)
+  );
 }
 
 function uniqueAttendantRows(rows) {
@@ -184,7 +191,7 @@ async function fetchClients(hablla, workspaceId, range) {
 }
 
 function formatCustomFieldValue(value) {
-  if (typeof value === "boolean") return value ? "Sim" : "Nao";
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
   if (value && typeof value === "object") return JSON.stringify(value);
   return value ?? "";
 }
@@ -240,7 +247,6 @@ function clientRow(person) {
     "followers",
     "sla_config_id",
     "workspace_id",
-    "description",
   ]);
   for (const [key, value] of Object.entries(person)) {
     if (knownFields.has(key) || value === null || value === undefined) continue;
@@ -255,8 +261,12 @@ function clientRow(person) {
     primaryPhone?.phone || "",
     primaryPhone?.is_whatsapp ? "Sim" : "",
     emails,
-    formatBrazilianDateTime(person.created_at),
-    formatBrazilianDateTime(person.updated_at),
+    GoogleSheets.dateTimeCell(formatBrazilianDateTime(person.created_at), {
+      pattern: "dd/MM/yyyy HH:mm:ss",
+    }),
+    GoogleSheets.dateTimeCell(formatBrazilianDateTime(person.updated_at), {
+      pattern: "dd/MM/yyyy HH:mm:ss",
+    }),
     sectors,
     tags,
     customFields[CLIENT_CUSTOM_FIELD_IDS[0]] || "",
@@ -267,7 +277,6 @@ function clientRow(person) {
     customFields[CLIENT_CUSTOM_FIELD_IDS[5]] || "",
     otherFields.join("; "),
     users,
-    person.description || "",
   ];
 }
 
@@ -331,8 +340,8 @@ async function run() {
           ? card.user.name || card.user.email || ""
           : "";
       return [
-        formatBrazilianDateTime(card.updated_at),
-        formatBrazilianDateTime(card.created_at),
+        GoogleSheets.dateTimeCell(formatBrazilianDateTime(card.updated_at)),
+        GoogleSheets.dateTimeCell(formatBrazilianDateTime(card.created_at)),
         card.workspace || "",
         card.board || "",
         card.list || "",
@@ -344,7 +353,7 @@ async function run() {
         card.source || "",
         card.status || "",
         userId,
-        formatBrazilianDateTime(card.finished_at),
+        GoogleSheets.dateTimeCell(formatBrazilianDateTime(card.finished_at)),
         card.id,
         userName,
         fields[3],
@@ -360,14 +369,9 @@ async function run() {
       columnRange: "A:S",
       header: CARD_HEADERS,
       newRows: cardRows,
-      matchColumnIndexes: [0, 14],
-      shouldReplace: (row) => {
-        const rowDate = parseBrazilianDateKey(row[0]);
-        return (
-          cardIds.has(String(row[14] || "")) ||
-          (rowDate && rowDate >= sevenDays.day)
-        );
-      },
+      matchColumnIndexes: [1, 14],
+      shouldReplace: (row) =>
+        shouldReplaceCardRow(row, cardIds, sevenDays.day),
     });
     console.log(
       `>>> ${cardResult.removed} cards substituidos por ${cardResult.inserted}.`,
@@ -387,7 +391,7 @@ async function run() {
         const sector = item.sector || {};
         const connection = item.connection || {};
         return [
-          yesterday.label,
+          GoogleSheets.dateCell(yesterday.label),
           HABLLA_WORKSPACE_ID,
           sector.id || "",
           sector.name || "",
@@ -434,7 +438,7 @@ async function run() {
       const clientIds = new Set(clientRows.map((row) => String(row[0])));
       const clientResult = await sheets.replaceRows({
         sheetTitle: "Base Cliente",
-        columnRange: "A:R",
+        columnRange: "A:Q",
         header: CLIENT_HEADERS,
         newRows: clientRows,
         matchColumnIndexes: [0],
@@ -458,4 +462,11 @@ async function run() {
 
 module.exports = run;
 module.exports.uniqueAttendantRows = uniqueAttendantRows;
+module.exports._internals = {
+  CARD_HEADERS,
+  CLIENT_HEADERS,
+  clientRow,
+  formatCustomFieldValue,
+  shouldReplaceCardRow,
+};
 if (require.main === module) run();

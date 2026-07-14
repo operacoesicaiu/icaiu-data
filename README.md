@@ -159,6 +159,8 @@ Proteções importantes:
 - escritas ambíguas não são repetidas cegamente: primeiro o estado final é lido e validado;
 - Apps Script ou outro escritor legítimo pode alterar a planilha depois de uma execução bem-sucedida; por isso uma comparação posterior deve considerar o horário de cada gravação.
 
+Strings são gravadas como texto literal, sem apóstrofo visível e sem permitir execução de fórmulas. Campos que historicamente eram datas, horas, booleanos ou números continuam com esses tipos no Sheets. A `Base Cliente` conserva o contrato de 17 colunas; descrições pertencem a `Outros Campos`. No SIGE, a janela é substituída e a deduplicação global pela coluna J remove somente ocorrências anteriores, preservando fisicamente a última linha.
+
 ## Paginação eficiente do Hablla
 
 Cards são solicitados com `order=updated_at`, `direction=desc` e corte temporal. A janela de negócio usa **`created_at`**, preservando o comportamento histórico. A data `updated_at` ordena a busca e permite provar quando as páginas seguintes já não podem conter um card criado dentro do prazo.
