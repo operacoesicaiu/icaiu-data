@@ -1,0 +1,41 @@
+name: Legacy Zoho Leads Sheets
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: legacy-zoho-leads-sheets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node src/google/run-legacy-sheets.js zoho-leads-sync.js
+        env:
+          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,ZOHO_CLIENT_ID,ZOHO_CLIENT_SECRET,ZOHO_REFRESH_TOKEN,ZOHO_ACCOUNT_OWNER,ZOHO_APP_LINK_NAME,ZOHO_REPORT_LINK_NAME,COLUMN_MAPPING,SPREADSHEET_ID,SHEET_NAME
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          ZOHO_ACCOUNT_OWNER: ${{ secrets.ZOHO_ACCOUNT_OWNER }}
+          ZOHO_APP_LINK_NAME: ${{ secrets.ZOHO_LEADS_APP_NAME }}
+          ZOHO_REPORT_LINK_NAME: ${{ secrets.ZOHO_LEADS_REPORT_NAME }}
+          COLUMN_MAPPING: ${{ secrets.ZOHO_LEADS_COLUMN_MAPPING }}
+          SPREADSHEET_ID: ${{ secrets.ZOHO_LEADS_SPREADSHEET_ID }}
+          SHEET_NAME: ${{ secrets.ZOHO_LEADS_SHEET_NAME }}

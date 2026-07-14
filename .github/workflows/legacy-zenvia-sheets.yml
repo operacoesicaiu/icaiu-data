@@ -1,0 +1,36 @@
+name: Legacy Zenvia Sheets
+
+on:
+  schedule:
+    - cron: "5 14 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: legacy-zenvia-sheets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node src/google/run-legacy-sheets.js zenvia-sync.js
+        env:
+          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,ZENVIA_ACCESS_TOKEN,SPREADSHEET_ID,SHEET_NAME
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          ZENVIA_ACCESS_TOKEN: ${{ secrets.ZENVIA_ACCESS_TOKEN }}
+          ZENVIA_QUEUE_ID: ${{ secrets.ZENVIA_QUEUE_ID }}
+          SPREADSHEET_ID: ${{ secrets.ZENVIA_SHEETS_SPREADSHEET_ID }}
+          SHEET_NAME: ${{ secrets.ZENVIA_SHEETS_SHEET_NAME }}

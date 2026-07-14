@@ -1,0 +1,37 @@
+name: Legacy SIGE Sheets
+
+on:
+  schedule:
+    - cron: "15 14 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: legacy-sige-sheets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node src/google/run-legacy-sheets.js sige-sync.js
+        env:
+          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,SIGE_TOKEN,SIGE_USER,SIGE_APP,SPREADSHEET_ID,ERP_SPREADSHEET_ID
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          SIGE_TOKEN: ${{ secrets.SIGE_TOKEN }}
+          SIGE_USER: ${{ secrets.SIGE_USER }}
+          SIGE_APP: ${{ secrets.SIGE_APP }}
+          SPREADSHEET_ID: ${{ secrets.SIGE_SHEETS_SPREADSHEET_ID }}
+          ERP_SPREADSHEET_ID: ${{ secrets.SIGE_ERP_SPREADSHEET_ID }}

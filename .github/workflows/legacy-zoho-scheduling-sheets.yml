@@ -1,0 +1,41 @@
+name: Legacy Zoho Scheduling Sheets
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: legacy-zoho-scheduling-sheets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node src/google/run-legacy-sheets.js zoho-scheduling-sync.js
+        env:
+          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,ZOHO_CLIENT_ID,ZOHO_CLIENT_SECRET,ZOHO_REFRESH_TOKEN,ZOHO_ACCOUNT_OWNER,ZOHO_APP_NAME,ZOHO_REPORT_NAME,REPORT_COLUMN_MAPPING,REPORT_SPREADSHEET_ID,REPORT_SHEET_NAME
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          ZOHO_ACCOUNT_OWNER: ${{ secrets.ZOHO_ACCOUNT_OWNER }}
+          ZOHO_APP_NAME: ${{ secrets.ZOHO_SCHEDULING_APP_NAME }}
+          ZOHO_REPORT_NAME: ${{ secrets.ZOHO_SCHEDULING_REPORT_NAME }}
+          REPORT_COLUMN_MAPPING: ${{ secrets.ZOHO_SCHEDULING_COLUMN_MAPPING }}
+          REPORT_SPREADSHEET_ID: ${{ secrets.ZOHO_SCHEDULING_SPREADSHEET_ID }}
+          REPORT_SHEET_NAME: ${{ secrets.ZOHO_SCHEDULING_SHEET_NAME }}

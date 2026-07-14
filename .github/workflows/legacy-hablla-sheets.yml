@@ -1,0 +1,36 @@
+name: Legacy Hablla Sheets
+
+on:
+  schedule:
+    - cron: "10 14 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: legacy-hablla-sheets
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node src/google/run-legacy-sheets.js hablla-sync.js
+        env:
+          REQUIRED_ENV: GOOGLE_CLIENT_EMAIL,GOOGLE_PRIVATE_KEY,HABLLA_TOKEN,HABLLA_WORKSPACE_ID,HABLLA_BOARD_ID,SPREADSHEET_ID
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          HABLLA_TOKEN: ${{ secrets.HABLLA_TOKEN }}
+          HABLLA_WORKSPACE_ID: ${{ secrets.HABLLA_WORKSPACE_ID }}
+          HABLLA_BOARD_ID: ${{ secrets.HABLLA_BOARD_ID }}
+          SPREADSHEET_ID: ${{ secrets.HABLLA_SHEETS_SPREADSHEET_ID }}
