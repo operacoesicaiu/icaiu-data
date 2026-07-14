@@ -33,5 +33,5 @@ jobs:
           SIGE_TOKEN: ${{ secrets.SIGE_TOKEN }}
           SIGE_USER: ${{ secrets.SIGE_USER }}
           SIGE_APP: ${{ secrets.SIGE_APP }}
-          SPREADSHEET_ID: ${{ secrets.SIGE_SHEETS_SPREADSHEET_ID }}
+          SPREADSHEET_ID: ${{ secrets.SIGE_SPREADSHEET_ID }}
           ERP_SPREADSHEET_ID: ${{ secrets.SIGE_ERP_SPREADSHEET_ID }}

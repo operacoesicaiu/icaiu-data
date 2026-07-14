@@ -32,5 +32,5 @@ jobs:
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
           ZENVIA_ACCESS_TOKEN: ${{ secrets.ZENVIA_ACCESS_TOKEN }}
           ZENVIA_QUEUE_ID: ${{ secrets.ZENVIA_QUEUE_ID }}
-          SPREADSHEET_ID: ${{ secrets.ZENVIA_SHEETS_SPREADSHEET_ID }}
-          SHEET_NAME: ${{ secrets.ZENVIA_SHEETS_SHEET_NAME }}
+          SPREADSHEET_ID: ${{ secrets.ZENVIA_SPREADSHEET_ID }}
+          SHEET_NAME: ${{ secrets.ZENVIA_SHEET_NAME }}
