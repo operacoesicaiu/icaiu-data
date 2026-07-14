@@ -12,29 +12,18 @@ function secureLog(message, isError = false) {
 }
 
 // Função para impedir Spreadsheet Formula Injection
-function sanitize(val) {
-  if (typeof val !== "string") return val;
-  const formulaChars = ["=", "+", "-", "@"];
-  if (formulaChars.some((char) => val.startsWith(char))) {
-    return `'${val}`;
-  }
-  return val;
-}
-
 // Processa campos complexos do Zoho (Lookups, Multi-select, etc)
 function extractValue(value) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "object" && !Array.isArray(value)) {
-    return sanitize(value.display_value || value.ID || String(value));
+    return value.display_value || value.ID || String(value);
   }
   if (Array.isArray(value)) {
-    return sanitize(
-      value
-        .map((v) => (typeof v === "object" ? v.display_value || v : v))
-        .join(", "),
-    );
+    return value
+      .map((v) => (typeof v === "object" ? v.display_value || v : v))
+      .join(", ");
   }
-  return sanitize(String(value));
+  return String(value);
 }
 
 function dateInSaoPaulo(daysAgo) {

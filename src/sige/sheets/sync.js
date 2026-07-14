@@ -19,18 +19,6 @@ function secureLog(message, isError = false) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function sanitize(val) {
-  if (typeof val !== "string") return val;
-
-  const formulaChars = ["=", "+", "-", "@"];
-
-  if (formulaChars.some((char) => val.startsWith(char))) {
-    return `'${val}`;
-  }
-
-  return val;
-}
-
 function formatarDataBR(dataInput) {
   if (!dataInput) return "";
 
@@ -236,28 +224,28 @@ async function run() {
             if (serialNovo !== "" && serialRetirada !== "") break;
         }
 
-        const displayNovo = serialNovo !== "" ? `'${serialNovo}` : 0;
+        const displayNovo = serialNovo !== "" ? serialNovo : 0;
 
         const displayRetirada =
-          serialRetirada !== "" ? `'${serialRetirada}` : 0;
+          serialRetirada !== "" ? serialRetirada : 0;
 
         rowsFinal.push([
-          sanitize(""),
-          p.Codigo,
-          sanitize(p.StatusSistema || ""),
-          formatarDataBR(dataVenda),
-          sanitize(p.Cliente || ""),
           "",
-          sanitize(p.ClienteEmail || ""),
+          p.Codigo,
+          p.StatusSistema || "",
+          formatarDataBR(dataVenda),
+          p.Cliente || "",
+          "",
+          p.ClienteEmail || "",
           valorTotal,
-          sanitize(p.Vendedor || ""),
-          sanitize(`Pedido ${p.Codigo}`),
-          sanitize(clienteCpf),
+          p.Vendedor || "",
+          `Pedido ${p.Codigo}`,
+          clienteCpf,
           displayNovo,
-          sanitize(respNovo),
+          respNovo,
           serialRetirada !== "" ? valorTotal * 0.5 : valorTotal,
           displayRetirada,
-          sanitize(respRetirada),
+          respRetirada,
           serialRetirada !== "" ? valorTotal * 0.5 : 0,
           `${dataVenda.getMonth() + 1}/${dataVenda.getFullYear()}`,
         ]);

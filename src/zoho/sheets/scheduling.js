@@ -11,24 +11,17 @@ function secureLog(message, isError = false) {
   console.log(`[${timestamp}] [${isError ? "ERROR" : "INFO"}] ${message}`);
 }
 
-function sanitize(value) {
-  const text = String(value ?? "");
-  return ["=", "+", "-", "@"].some((prefix) => text.startsWith(prefix))
-    ? `'${text}`
-    : text;
-}
-
 function formatZohoValue(value) {
   if (value === null || value === undefined || value === "") return "";
   if (Array.isArray(value)) {
-    return sanitize(value.map((item) =>
+    return value.map((item) =>
       typeof item === "object" ? item.display_value || item.ID || "" : item,
-    ).join(", "));
+    ).join(", ");
   }
   if (typeof value === "object") {
-    return sanitize(value.display_value || value.ID || "");
+    return String(value.display_value || value.ID || "");
   }
-  return sanitize(value);
+  return String(value);
 }
 
 function todayInSaoPaulo() {
@@ -173,12 +166,12 @@ async function run() {
       }
 
       row[0] = A;
-      row[3] = `'${D}`;
+      row[3] = D;
       row[5] = F;
       return [
         ...row,
         dictionary[N] || "",
-        `'${serialT}${D}`,
+        `${serialT}${D}`,
         columnR,
         (M || "").split(" ")[1] || "",
         columnT,

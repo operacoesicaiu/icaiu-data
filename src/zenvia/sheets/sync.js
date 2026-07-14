@@ -53,13 +53,6 @@ function secureLog(message, isError = false) {
   console.log(`[${timestamp}] [${logLevel}] ${message}`);
 }
 
-function sanitize(value) {
-  if (typeof value !== "string") return value;
-  return ["=", "+", "-", "@"].some((prefix) => value.startsWith(prefix))
-    ? `'${value}`
-    : value;
-}
-
 function validateEnvironment() {
   if (!GOOGLE_TOKEN || GOOGLE_TOKEN === "undefined") {
     throw new Error("GOOGLE_TOKEN nao definido");
@@ -212,7 +205,7 @@ async function runIntegration() {
         item.url_gravacao || "", // Gravação (AD)
         item.id || "", // Gravação ID (AE)
         item.ativa || "", // Ativa (AI)
-      ].map(sanitize);
+      ];
     });
 
     const dataOntemBR = `${String(ontemBR.getDate()).padStart(2, "0")}/${String(ontemBR.getMonth() + 1).padStart(2, "0")}/${ontemBR.getFullYear()}`;

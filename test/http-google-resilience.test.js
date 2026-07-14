@@ -262,3 +262,11 @@ test("replaceRows lê somente colunas seletoras e exclui blocos de baixo para ci
   assert.equal(update.requests.some((request) => request.insertDimension), false);
   assert.deepEqual(result, { previous: 4, removed: 2, inserted: 1, final: 3 });
 });
+
+test("caracteres de formula permanecem texto literal sem apostrofo", () => {
+  for (const value of ["=SUM(A1:A2)", "+5511999999999", "-texto", "@usuario"]) {
+    assert.deepEqual(GoogleSheets.literalCell(value), {
+      userEnteredValue: { stringValue: value },
+    });
+  }
+});

@@ -88,15 +88,6 @@ function positiveInteger(value, fallback, name) {
   return number;
 }
 
-function sanitize(value) {
-  if (typeof value !== "string") return value;
-  return ["=", "+", "-", "@"].some((character) =>
-    value.startsWith(character),
-  )
-    ? `'${value}`
-    : value;
-}
-
 function parseBrazilianDateKey(value) {
   const match = String(value || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (!match) return null;
@@ -260,23 +251,23 @@ function clientRow(person) {
 
   return [
     person.id,
-    sanitize(person.name || ""),
-    sanitize(primaryPhone?.phone || ""),
+    person.name || "",
+    primaryPhone?.phone || "",
     primaryPhone?.is_whatsapp ? "Sim" : "",
-    sanitize(emails),
+    emails,
     formatBrazilianDateTime(person.created_at),
     formatBrazilianDateTime(person.updated_at),
-    sanitize(sectors),
-    sanitize(tags),
-    sanitize(customFields[CLIENT_CUSTOM_FIELD_IDS[0]] || ""),
-    sanitize(customFields[CLIENT_CUSTOM_FIELD_IDS[1]] || ""),
-    sanitize(customFields[CLIENT_CUSTOM_FIELD_IDS[2]] || ""),
-    sanitize(customFields[CLIENT_CUSTOM_FIELD_IDS[3]] || ""),
-    sanitize(customFields[CLIENT_CUSTOM_FIELD_IDS[4]] || ""),
-    sanitize(customFields[CLIENT_CUSTOM_FIELD_IDS[5]] || ""),
-    sanitize(otherFields.join("; ")),
-    sanitize(users),
-    sanitize(person.description || ""),
+    sectors,
+    tags,
+    customFields[CLIENT_CUSTOM_FIELD_IDS[0]] || "",
+    customFields[CLIENT_CUSTOM_FIELD_IDS[1]] || "",
+    customFields[CLIENT_CUSTOM_FIELD_IDS[2]] || "",
+    customFields[CLIENT_CUSTOM_FIELD_IDS[3]] || "",
+    customFields[CLIENT_CUSTOM_FIELD_IDS[4]] || "",
+    customFields[CLIENT_CUSTOM_FIELD_IDS[5]] || "",
+    otherFields.join("; "),
+    users,
+    person.description || "",
   ];
 }
 
@@ -345,20 +336,20 @@ async function run() {
         card.workspace || "",
         card.board || "",
         card.list || "",
-        sanitize(fields[0]),
-        sanitize(fields[1]),
-        sanitize(fields[2]),
-        sanitize(card.name || ""),
-        sanitize(card.description || ""),
+        fields[0],
+        fields[1],
+        fields[2],
+        card.name || "",
+        card.description || "",
         card.source || "",
         card.status || "",
         userId,
         formatBrazilianDateTime(card.finished_at),
         card.id,
-        sanitize(userName),
-        sanitize(fields[3]),
-        sanitize((card.tags || []).map((tag) => tag.name).join(", ")),
-        sanitize(fields[4]),
+        userName,
+        fields[3],
+        (card.tags || []).map((tag) => tag.name).join(", "),
+        fields[4],
       ];
     });
     assertRowWidth(cardRows, CARD_HEADERS.length, "Base Hablla Card");
@@ -399,15 +390,15 @@ async function run() {
           yesterday.label,
           HABLLA_WORKSPACE_ID,
           sector.id || "",
-          sanitize(sector.name || ""),
+          sector.name || "",
           user.id || "",
-          sanitize(user.name || ""),
-          sanitize(user.email || ""),
+          user.name || "",
+          user.email || "",
           item.total_services ?? 0,
           item.tme ?? 0,
           item.tma ?? 0,
           connection.id || "",
-          sanitize(connection.name || ""),
+          connection.name || "",
           connection.type || "",
           item.total_csat ?? 0,
           item.total_csat_greater_4 ?? 0,

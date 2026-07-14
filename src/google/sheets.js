@@ -14,7 +14,7 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function toCell(value) {
+function literalCell(value) {
   if (value === null || value === undefined || value === "") return {};
   if (typeof value === "number")
     return { userEnteredValue: { numberValue: value } };
@@ -259,7 +259,7 @@ class GoogleSheets {
       method: "post",
       url: `/values/${encodeRange(range)}:append`,
       params: {
-        valueInputOption: "USER_ENTERED",
+        valueInputOption: "RAW",
         insertDataOption: "INSERT_ROWS",
       },
       data: { values },
@@ -411,7 +411,7 @@ class GoogleSheets {
           startColumnIndex: 0,
           endColumnIndex: header.length,
         },
-        rows: [{ values: header.map(toCell) }],
+        rows: [{ values: header.map(literalCell) }],
         fields: "userEnteredValue",
       },
     });
@@ -430,7 +430,7 @@ class GoogleSheets {
       requests.push({
         appendCells: {
           sheetId,
-          rows: newRows.map((row) => ({ values: row.map(toCell) })),
+          rows: newRows.map((row) => ({ values: row.map(literalCell) })),
           fields: "userEnteredValue",
         },
       });
@@ -490,5 +490,7 @@ class GoogleSheets {
     };
   }
 }
+
+GoogleSheets.literalCell = literalCell;
 
 module.exports = GoogleSheets;
