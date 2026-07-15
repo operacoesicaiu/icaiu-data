@@ -209,39 +209,47 @@ function assertNonEmptyWindowReplacement({
   }
 }
 
+function resolveSchedulingConfig(env = process.env) {
+  return {
+    accountOwner: env.ZOHO_ACCOUNT_OWNER,
+    appName: env.ZOHO_SCHEDULING_APP_NAME || env.ZOHO_APP_NAME,
+    reportName: env.ZOHO_SCHEDULING_REPORT_NAME || env.ZOHO_REPORT_NAME,
+    spreadsheetId:
+      env.ZOHO_SCHEDULING_SPREADSHEET_ID || env.REPORT_SPREADSHEET_ID,
+    sheetName: env.ZOHO_SCHEDULING_SHEET_NAME || env.REPORT_SHEET_NAME,
+    columnMapping:
+      env.ZOHO_SCHEDULING_COLUMN_MAPPING || env.REPORT_COLUMN_MAPPING,
+    googleToken: env.GOOGLE_TOKEN,
+  };
+}
+
 async function run() {
   try {
-    const {
-      ZOHO_ACCOUNT_OWNER,
-      ZOHO_APP_NAME,
-      ZOHO_REPORT_NAME,
-      REPORT_SPREADSHEET_ID,
-      REPORT_SHEET_NAME,
-      GOOGLE_TOKEN,
-      REPORT_COLUMN_MAPPING,
-    } = process.env;
+    const config = resolveSchedulingConfig(process.env);
     if (
-      !ZOHO_ACCOUNT_OWNER ||
-      !ZOHO_APP_NAME ||
-      !ZOHO_REPORT_NAME ||
-      !REPORT_SPREADSHEET_ID ||
-      !REPORT_SHEET_NAME ||
-      !GOOGLE_TOKEN ||
-      !REPORT_COLUMN_MAPPING
+      !config.accountOwner ||
+      !config.appName ||
+      !config.reportName ||
+      !config.spreadsheetId ||
+      !config.sheetName ||
+      !config.googleToken ||
+      !config.columnMapping
     ) {
       throw new Error("Variaveis obrigatorias do Zoho Scheduling Sheets ausentes");
     }
 
-    const mapping = JSON.parse(REPORT_COLUMN_MAPPING);
+    const mapping = JSON.parse(config.columnMapping);
     if (!Array.isArray(mapping) || mapping.length !== 15) {
-      throw new Error("REPORT_COLUMN_MAPPING precisa ter exatamente 15 campos");
+      throw new Error(
+        "ZOHO_SCHEDULING_COLUMN_MAPPING precisa ter exatamente 15 campos",
+      );
     }
 
     const sheets = new GoogleSheets({
-      spreadsheetId: REPORT_SPREADSHEET_ID,
-      accessToken: GOOGLE_TOKEN,
+      spreadsheetId: config.spreadsheetId,
+      accessToken: config.googleToken,
     });
-    const currentHeader = (await sheets.getValues(`'${REPORT_SHEET_NAME}'!A1:AH1`))[0];
+    const currentHeader = (await sheets.getValues(`'${config.sheetName}'!A1:AH1`))[0];
     if (!currentHeader || currentHeader.length !== 34) {
       throw new Error("Cabecalho do Zoho Scheduling precisa ter 34 colunas (A:AH)");
     }
@@ -271,7 +279,7 @@ async function run() {
       let response;
       try {
         response = await zoho.get(
-          `https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_APP_NAME}/report/${ZOHO_REPORT_NAME}`,
+          `https://creator.zoho.com/api/v2/${config.accountOwner}/${config.appName}/report/${config.reportName}`,
           { params: { from: fromIndex, limit: 200, criteria } },
         );
       } catch (error) {
@@ -346,7 +354,7 @@ async function run() {
     }
 
     if (!finalData.length) {
-      const escapedSheetName = REPORT_SHEET_NAME.replace(/'/g, "''");
+      const escapedSheetName = config.sheetName.replace(/'/g, "''");
       const existingDates = await sheets.getValues(
         `'${escapedSheetName}'!R2:R`,
       );
@@ -364,7 +372,7 @@ async function run() {
     }
 
     const result = await sheets.replaceRows({
-      sheetTitle: REPORT_SHEET_NAME,
+      sheetTitle: config.sheetName,
       columnRange: "A:AH",
       header: currentHeader,
       newRows: finalData,
@@ -384,6 +392,7 @@ async function run() {
 run.applySchedulingTypes = applySchedulingTypes;
 run.normalizeSchedulingPhone = normalizeSchedulingPhone;
 run.resolveSchedulingWindow = resolveSchedulingWindow;
+run.resolveSchedulingConfig = resolveSchedulingConfig;
 run.buildSchedulingCriteria = buildSchedulingCriteria;
 run.dedupeZohoRecordsById = dedupeZohoRecordsById;
 run.assertNonEmptyWindowReplacement = assertNonEmptyWindowReplacement;

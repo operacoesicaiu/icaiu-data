@@ -101,6 +101,27 @@ test("Zoho Scheduling preserva o default e permite dias concluidos ou datas expl
   );
 });
 
+test("Zoho Scheduling usa diretamente os nomes claros do repositorio", () => {
+  const config = scheduling.resolveSchedulingConfig({
+    ZOHO_ACCOUNT_OWNER: "owner",
+    ZOHO_SCHEDULING_APP_NAME: "app",
+    ZOHO_SCHEDULING_REPORT_NAME: "report",
+    ZOHO_SCHEDULING_COLUMN_MAPPING: "[]",
+    ZOHO_SCHEDULING_SPREADSHEET_ID: "spreadsheet",
+    ZOHO_SCHEDULING_SHEET_NAME: "sheet",
+    GOOGLE_TOKEN: "token",
+  });
+  assert.deepEqual(config, {
+    accountOwner: "owner",
+    appName: "app",
+    reportName: "report",
+    spreadsheetId: "spreadsheet",
+    sheetName: "sheet",
+    columnMapping: "[]",
+    googleToken: "token",
+  });
+});
+
 test("Zoho Scheduling deduplica IDs, rejeita hoje e protege retorno vazio", () => {
   const first = { ID: "1", marker: "antigo" };
   const only = { ID: "2", marker: "unico" };
