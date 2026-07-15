@@ -7,6 +7,7 @@ const {
   CARD_HEADERS,
   buildCardSheet,
   normalizePhoneValue,
+  stripLeadingApostrophes,
 } = require("../card-sheet-schema");
 const {
   extractAttendants,
@@ -378,7 +379,7 @@ function clientRow(person) {
     );
   }
 
-  return [
+  const row = [
     person.id,
     person.name || "",
     normalizePhoneValue(primaryPhone?.phone || ""),
@@ -401,6 +402,9 @@ function clientRow(person) {
     otherFields.join("; "),
     users,
   ];
+  return row.map((value, index) =>
+    index === 5 || index === 6 ? value : stripLeadingApostrophes(value),
+  );
 }
 
 async function run() {

@@ -132,6 +132,7 @@ test('coletas repetidas fazem retry e conservam a versao mais recente por ID', a
 test('Base Cliente conserva contrato histórico de 17 colunas', () => {
   const person = {
     id: 'client-1',
+    name: "'Cliente sem escape",
     description: 'Descrição histórica',
     phones: [{ phone: '+5511999999999', is_whatsapp: true }],
     custom_fields: [
@@ -144,6 +145,7 @@ test('Base Cliente conserva contrato histórico de 17 colunas', () => {
   assert.equal(CLIENT_HEADERS.length, 17);
   assert.equal(result.length, 17);
   assert.equal(result[9], 'Não');
+  assert.equal(result[1], 'Cliente sem escape');
   assert.equal(result[2], '5511999999999');
   assert.equal(result[13], '5511888888888');
   assert.match(result[15], /description: Descrição histórica/);
