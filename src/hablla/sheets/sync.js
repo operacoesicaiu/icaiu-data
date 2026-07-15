@@ -1,34 +1,17 @@
 const GoogleSheets = require("../../google/sheets");
+const { backoffMs, sleep } = require("../../lib/http-retry");
 const formatPublicError = require("../../lib/public-error");
 const getHabllaClient = require("../api");
 const collectHabllaCards = require("../card-collector");
+const {
+  CARD_HEADERS,
+  buildCardSheet,
+} = require("../card-sheet-schema");
 const {
   extractAttendants,
   extractClients,
 } = require("../response-contracts");
 const saoPauloDayRange = require("../date-range");
-
-const CARD_HEADERS = [
-  "updated_at",
-  "created_at",
-  "workspace",
-  "board",
-  "list",
-  "custom_field_1",
-  "custom_field_2",
-  "custom_field_3",
-  "name",
-  "description",
-  "source",
-  "status",
-  "user",
-  "finished_at",
-  "id",
-  "Atendente",
-  "Motivo de Contato",
-  "Tags",
-  "Telefone",
-];
 
 const ATTENDANT_HEADERS = [
   "Data",
@@ -87,18 +70,130 @@ function positiveInteger(value, fallback, name) {
   return number;
 }
 
+function booleanOption(value, fallback, name) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "sim"].includes(normalized)) return true;
+  if (["0", "false", "no", "nao", "não"].includes(normalized)) return false;
+  throw new Error(`${name} precisa ser true ou false`);
+}
+
+function selectedDatasets(value) {
+  const allowed = new Set(["cards", "attendants", "clients"]);
+  const selected = String(value || "cards,attendants,clients")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  if (!selected.length || selected.some((item) => !allowed.has(item))) {
+    throw new Error(
+      "HABLLA_SHEETS_DATASETS aceita cards, attendants e clients",
+    );
+  }
+  return new Set(selected);
+}
+
+function columnLetter(index) {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error("Indice de coluna invalido");
+  }
+  let value = index + 1;
+  let result = "";
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
+}
+
+function completedDayRanges(days) {
+  const safeDays = positiveInteger(
+    days,
+    1,
+    "Quantidade de dias concluidos do Hablla Sheets",
+  );
+  return Array.from({ length: safeDays }, (_, index) =>
+    saoPauloDayRange(safeDays - index),
+  );
+}
+
 function parseBrazilianDateKey(value) {
   const match = String(value || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (!match) return null;
   return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
 }
 
-function shouldReplaceCardRow(row, cardIds, cutoffDay) {
+function shouldReplaceCardRow(
+  row,
+  cardIds,
+  cutoffDay,
+  { preserveUnfetched = false } = {},
+) {
   const createdDay = parseBrazilianDateKey(row[1]);
   return (
     cardIds.has(String(row[14] || "")) ||
-    Boolean(createdDay && createdDay >= cutoffDay)
+    (!preserveUnfetched && Boolean(createdDay && createdDay >= cutoffDay))
   );
+}
+
+function mergeCardSnapshots(cardsById, cards) {
+  for (const card of cards) {
+    const id = String(card.id || "");
+    if (!id) throw new Error("Hablla retornou card sem id ao consolidar coletas");
+    const updatedAt = new Date(card.updated_at).getTime();
+    if (!Number.isFinite(updatedAt)) {
+      throw new Error("Hablla retornou updated_at invalido ao consolidar coletas");
+    }
+    const current = cardsById.get(id);
+    if (!current || updatedAt >= current.updatedAt) {
+      cardsById.set(id, { card, updatedAt });
+    }
+  }
+}
+
+async function collectCardSnapshots({
+  hablla,
+  workspaceId,
+  boardId,
+  cutoff,
+  exhaustive,
+  passes,
+  attempts,
+  collect = collectHabllaCards,
+  wait = sleep,
+}) {
+  const cardsById = new Map();
+  for (let pass = 1; pass <= passes; pass += 1) {
+    let cards;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        console.log(`>>> Coleta de cards ${pass}/${passes}, tentativa ${attempt}/${attempts}...`);
+        cards = await collect({
+          hablla,
+          workspaceId,
+          boardId,
+          cutoff,
+          exhaustive,
+        });
+        break;
+      } catch (error) {
+        if (attempt === attempts) throw error;
+        const waitMs = backoffMs(attempt - 1, {
+          baseMs: 5000,
+          maxMs: 30000,
+        });
+        console.log(
+          `>>> Coleta inconsistente; reiniciando em ${Math.ceil(waitMs / 1000)}s.`,
+        );
+        await wait(waitMs);
+      }
+    }
+    mergeCardSnapshots(cardsById, cards);
+    console.log(
+      `>>> Coleta ${pass}/${passes} concluida; ${cardsById.size} cards unicos consolidados.`,
+    );
+  }
+  return [...cardsById.values()].map(({ card }) => card);
 }
 
 function uniqueAttendantRows(rows) {
@@ -115,6 +210,22 @@ function uniqueAttendantRows(rows) {
     byKey.set(key, row);
   }
   return [...byKey.values()];
+}
+
+function assertEmptyAttendantDaysAreSafe(emptyLabels, existingValues) {
+  const existingLabels = new Set(
+    (Array.isArray(existingValues) ? existingValues : []).map((row) =>
+      String(row?.[0] || "").split(" ")[0],
+    ),
+  );
+  const protectedLabels = emptyLabels.filter((label) =>
+    existingLabels.has(label),
+  );
+  if (protectedLabels.length) {
+    throw new Error(
+      `Hablla retornou zero atendentes em ${protectedLabels.length} dias que ja possuem linhas; substituicao cancelada`,
+    );
+  }
 }
 
 function formatBrazilianDateTime(value) {
@@ -173,7 +284,18 @@ async function fetchClients(hablla, workspaceId, range) {
 
     for (const client of clients) {
       if (!client.id) throw new Error("Hablla retornou client sem id");
-      clientsById.set(String(client.id), client);
+      const id = String(client.id);
+      const current = clientsById.get(id);
+      const updatedAt = new Date(client.updated_at || client.created_at).getTime();
+      const currentUpdatedAt = current
+        ? new Date(current.updated_at || current.created_at).getTime()
+        : Number.NEGATIVE_INFINITY;
+      if (!Number.isFinite(updatedAt)) {
+        throw new Error("Hablla retornou client sem data valida");
+      }
+      if (!current || updatedAt >= currentUpdatedAt) {
+        clientsById.set(id, client);
+      }
     }
 
     if (clients.length < 50) {
@@ -288,10 +410,18 @@ async function run() {
       HABLLA_BOARD_ID,
       HABLLA_SPREADSHEET_ID,
     } = process.env;
+    const datasets = selectedDatasets(process.env.HABLLA_SHEETS_DATASETS);
+    const allowEmpty = booleanOption(
+      process.env.HABLLA_SHEETS_ALLOW_EMPTY_REPLACEMENT,
+      false,
+      "HABLLA_SHEETS_ALLOW_EMPTY_REPLACEMENT",
+    );
 
     if (!GOOGLE_TOKEN) throw new Error("GOOGLE_TOKEN ausente");
     if (!HABLLA_WORKSPACE_ID) throw new Error("HABLLA_WORKSPACE_ID ausente");
-    if (!HABLLA_BOARD_ID) throw new Error("HABLLA_BOARD_ID ausente");
+    if (datasets.has("cards") && !HABLLA_BOARD_ID) {
+      throw new Error("HABLLA_BOARD_ID ausente");
+    }
     if (!HABLLA_SPREADSHEET_ID) {
       throw new Error("HABLLA_SPREADSHEET_ID ausente");
     }
@@ -302,139 +432,187 @@ async function run() {
     });
     const hablla = await getHabllaClient();
     const sheetIds = await sheets.getSheetIdByTitle();
-    if (sheetIds["Base Hablla Card"] === undefined) {
+    if (
+      datasets.has("cards") &&
+      sheetIds["Base Hablla Card"] === undefined
+    ) {
       throw new Error("Aba Base Hablla Card nao encontrada");
     }
-    if (sheetIds["Base Atendente"] === undefined) {
+    if (
+      datasets.has("attendants") &&
+      sheetIds["Base Atendente"] === undefined
+    ) {
       throw new Error("Aba Base Atendente nao encontrada");
     }
-    const hasClientSheet = sheetIds["Base Cliente"] !== undefined;
+    const hasClientSheet =
+      datasets.has("clients") && sheetIds["Base Cliente"] !== undefined;
 
-    const sevenDays = saoPauloDayRange(7);
-    console.log(">>> Sincronizando cards Hablla...");
-    const cards = await collectHabllaCards({
-      hablla,
-      workspaceId: HABLLA_WORKSPACE_ID,
-      boardId: HABLLA_BOARD_ID,
-      cutoff: sevenDays.start,
-    });
-    const cardCustomFieldIds = [
-      "67b39131ee792966f3fba492",
-      "67b608470787782ce7acafba",
-      "67dc6a0a17925c23d8365708",
-      "679120ec177ff6d2c7597156",
-      "69e8d49592607a5877e699d5",
-    ];
-    const cardRows = cards.map((card) => {
-      const fields = ["", "", "", "", ""];
-      for (const field of card.custom_fields || []) {
-        const index = cardCustomFieldIds.indexOf(field.custom_field);
-        if (index !== -1) fields[index] = field.value;
+    if (datasets.has("cards")) {
+      const cardDays = positiveInteger(
+        process.env.HABLLA_CARDS_DAYS,
+        7,
+        "HABLLA_CARDS_DAYS",
+      );
+      const cardRange = saoPauloDayRange(cardDays);
+      const exhaustive = booleanOption(
+        process.env.HABLLA_CARDS_EXHAUSTIVE,
+        false,
+        "HABLLA_CARDS_EXHAUSTIVE",
+      );
+      const passes = positiveInteger(
+        process.env.HABLLA_CARDS_CRAWL_PASSES,
+        1,
+        "HABLLA_CARDS_CRAWL_PASSES",
+      );
+      const attempts = positiveInteger(
+        process.env.HABLLA_CARDS_CRAWL_ATTEMPTS,
+        1,
+        "HABLLA_CARDS_CRAWL_ATTEMPTS",
+      );
+      const preserveUnfetched = booleanOption(
+        process.env.HABLLA_CARDS_PRESERVE_UNFETCHED,
+        true,
+        "HABLLA_CARDS_PRESERVE_UNFETCHED",
+      );
+
+      console.log(
+        `>>> Sincronizando cards Hablla da janela de ${cardDays} dias...`,
+      );
+      const cards = await collectCardSnapshots({
+        hablla,
+        workspaceId: HABLLA_WORKSPACE_ID,
+        boardId: HABLLA_BOARD_ID,
+        cutoff: cardRange.start,
+        exhaustive,
+        passes,
+        attempts,
+      });
+      const headerRows = await sheets.getValues("'Base Hablla Card'!1:1");
+      const existingHeader = headerRows[0]?.length
+        ? headerRows[0]
+        : CARD_HEADERS;
+      const { header: cardHeader, rows: cardRows } = buildCardSheet(
+        cards,
+        existingHeader,
+      );
+      assertRowWidth(cardRows, cardHeader.length, "Base Hablla Card");
+      if (!cardRows.length && !allowEmpty) {
+        throw new Error("Hablla retornou zero cards; substituicao cancelada");
       }
-      const userId =
-        card.user && typeof card.user === "object"
-          ? card.user.id || ""
-          : card.user || "";
-      const userName =
-        card.user && typeof card.user === "object"
-          ? card.user.name || card.user.email || ""
-          : "";
-      return [
-        GoogleSheets.dateTimeCell(formatBrazilianDateTime(card.updated_at)),
-        GoogleSheets.dateTimeCell(formatBrazilianDateTime(card.created_at)),
-        card.workspace || "",
-        card.board || "",
-        card.list || "",
-        fields[0],
-        fields[1],
-        fields[2],
-        card.name || "",
-        card.description || "",
-        card.source || "",
-        card.status || "",
-        userId,
-        GoogleSheets.dateTimeCell(formatBrazilianDateTime(card.finished_at)),
-        card.id,
-        userName,
-        fields[3],
-        (card.tags || []).map((tag) => tag.name).join(", "),
-        fields[4],
-      ];
-    });
-    assertRowWidth(cardRows, CARD_HEADERS.length, "Base Hablla Card");
 
-    const cardIds = new Set(cardRows.map((row) => String(row[14])));
-    const cardResult = await sheets.replaceRows({
-      sheetTitle: "Base Hablla Card",
-      columnRange: "A:S",
-      header: CARD_HEADERS,
-      newRows: cardRows,
-      matchColumnIndexes: [1, 14],
-      shouldReplace: (row) =>
-        shouldReplaceCardRow(row, cardIds, sevenDays.day),
-    });
-    console.log(
-      `>>> ${cardResult.removed} cards substituidos por ${cardResult.inserted}.`,
-    );
+      const cardIds = new Set(cardRows.map((row) => String(row[14])));
+      const cardResult = await sheets.replaceRowsViaStaging({
+        sheetTitle: "Base Hablla Card",
+        columnRange: `A:${columnLetter(cardHeader.length - 1)}`,
+        header: cardHeader,
+        newRows: cardRows,
+        matchColumnIndexes: [1, 14],
+        shouldReplace: (row) =>
+          shouldReplaceCardRow(row, cardIds, cardRange.day, {
+            preserveUnfetched,
+          }),
+      });
+      console.log(
+        `>>> ${cardResult.removed} cards substituidos por ${cardResult.inserted}; ` +
+          `${cardHeader.length - CARD_HEADERS.length} colunas adicionais ativas.`,
+      );
+    }
 
-    const yesterday = saoPauloDayRange(1);
-    console.log(`>>> Sincronizando atendentes de ${yesterday.day}...`);
-    const attendantsResponse = await hablla.get(
-      `/v1/workspaces/${HABLLA_WORKSPACE_ID}/reports/services/summary`,
-      {
-        params: { start_date: yesterday.start, end_date: yesterday.end },
-      },
-    );
-    const rawAttendantRows = extractAttendants(attendantsResponse.data).map(
-      (item) => {
-        const user = item.user || {};
-        const sector = item.sector || {};
-        const connection = item.connection || {};
-        return [
-          GoogleSheets.dateCell(yesterday.label),
-          HABLLA_WORKSPACE_ID,
-          sector.id || "",
-          sector.name || "",
-          user.id || "",
-          user.name || "",
-          user.email || "",
-          item.total_services ?? 0,
-          item.tme ?? 0,
-          item.tma ?? 0,
-          connection.id || "",
-          connection.name || "",
-          connection.type || "",
-          item.total_csat ?? 0,
-          item.total_csat_greater_4 ?? 0,
-          item.csat ?? 0,
-          item.total_fcr ?? 0,
-        ];
-      },
-    );
-    const attendantRows = uniqueAttendantRows(rawAttendantRows);
-    assertRowWidth(attendantRows, ATTENDANT_HEADERS.length, "Base Atendente");
-    const attendantResult = await sheets.replaceRows({
-      sheetTitle: "Base Atendente",
-      columnRange: "A:Q",
-      header: ATTENDANT_HEADERS,
-      newRows: attendantRows,
-      matchColumnIndexes: [0],
-      shouldReplace: (row) =>
-        String(row[0] || "").startsWith(yesterday.label),
-    });
-    console.log(
-      `>>> ${attendantResult.removed} atendentes substituidos por ${attendantResult.inserted}.`,
-    );
+    if (datasets.has("attendants")) {
+      const attendantRanges = completedDayRanges(
+        process.env.HABLLA_SHEETS_ATTENDANTS_DAYS || 1,
+      );
+      console.log(
+        `>>> Sincronizando atendentes de ${attendantRanges.length} dias concluidos...`,
+      );
+      const rawAttendantRows = [];
+      const attendantLabels = new Set();
+      const emptyAttendantLabels = [];
+      for (const range of attendantRanges) {
+        const attendantsResponse = await hablla.get(
+          `/v1/workspaces/${HABLLA_WORKSPACE_ID}/reports/services/summary`,
+          {
+            params: { start_date: range.start, end_date: range.end },
+          },
+        );
+        const rangeRows = extractAttendants(attendantsResponse.data).map((item) => {
+            const user = item.user || {};
+            const sector = item.sector || {};
+            const connection = item.connection || {};
+            return [
+              GoogleSheets.dateCell(range.label),
+              HABLLA_WORKSPACE_ID,
+              sector.id || "",
+              sector.name || "",
+              user.id || "",
+              user.name || "",
+              user.email || "",
+              item.total_services ?? 0,
+              item.tme ?? 0,
+              item.tma ?? 0,
+              connection.id || "",
+              connection.name || "",
+              connection.type || "",
+              item.total_csat ?? 0,
+              item.total_csat_greater_4 ?? 0,
+              item.csat ?? 0,
+              item.total_fcr ?? 0,
+            ];
+          });
+        rawAttendantRows.push(...rangeRows);
+        if (rangeRows.length || allowEmpty) {
+          attendantLabels.add(range.label);
+        } else {
+          emptyAttendantLabels.push(range.label);
+        }
+      }
+      if (emptyAttendantLabels.length) {
+        const existingDates = await sheets.getValues("'Base Atendente'!A2:A");
+        assertEmptyAttendantDaysAreSafe(emptyAttendantLabels, existingDates);
+        console.log(
+          `>>> ${emptyAttendantLabels.length} dias sem atendentes foram preservados sem remocao.`,
+        );
+      }
+      const attendantRows = uniqueAttendantRows(rawAttendantRows);
+      assertRowWidth(attendantRows, ATTENDANT_HEADERS.length, "Base Atendente");
+      if (!attendantRows.length && !allowEmpty) {
+        throw new Error("Hablla retornou zero atendentes; substituicao cancelada");
+      }
+      const attendantResult = await sheets.replaceRows({
+        sheetTitle: "Base Atendente",
+        columnRange: "A:Q",
+        header: ATTENDANT_HEADERS,
+        newRows: attendantRows,
+        matchColumnIndexes: [0],
+        shouldReplace: (row) =>
+          attendantLabels.has(String(row[0] || "").split(" ")[0]),
+      });
+      console.log(
+        `>>> ${attendantResult.removed} atendentes substituidos por ${attendantResult.inserted}.`,
+      );
+    }
 
     if (hasClientSheet) {
-      console.log(`>>> Sincronizando clientes de ${yesterday.day}...`);
+      const clientRanges = completedDayRanges(
+        process.env.HABLLA_SHEETS_CLIENTS_DAYS || 1,
+      );
+      const clientRange = {
+        start: clientRanges[0].start,
+        end: clientRanges.at(-1).end,
+      };
+      console.log(
+        `>>> Sincronizando clientes de ${clientRanges.length} dias concluidos...`,
+      );
       const clients = await fetchClients(
         hablla,
         HABLLA_WORKSPACE_ID,
-        yesterday,
+        clientRange,
       );
       const clientRows = clients.map(clientRow);
       assertRowWidth(clientRows, CLIENT_HEADERS.length, "Base Cliente");
+      if (!clientRows.length && !allowEmpty) {
+        throw new Error("Hablla retornou zero clientes; substituicao cancelada");
+      }
       const clientIds = new Set(clientRows.map((row) => String(row[0])));
       const clientResult = await sheets.replaceRows({
         sheetTitle: "Base Cliente",
@@ -447,7 +625,7 @@ async function run() {
       console.log(
         `>>> ${clientResult.removed} clientes substituidos por ${clientResult.inserted}.`,
       );
-    } else {
+    } else if (datasets.has("clients")) {
       console.log(">>> Aba Base Cliente ausente; sincronizacao ignorada.");
     }
 
@@ -465,8 +643,15 @@ module.exports.uniqueAttendantRows = uniqueAttendantRows;
 module.exports._internals = {
   CARD_HEADERS,
   CLIENT_HEADERS,
+  assertEmptyAttendantDaysAreSafe,
+  booleanOption,
   clientRow,
+  collectCardSnapshots,
+  columnLetter,
+  completedDayRanges,
   formatCustomFieldValue,
+  mergeCardSnapshots,
+  selectedDatasets,
   shouldReplaceCardRow,
 };
 if (require.main === module) run();

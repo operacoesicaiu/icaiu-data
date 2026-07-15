@@ -1,6 +1,11 @@
 const GoogleSheets = require("../../google/sheets");
 const { createIdPageTracker } = require("../../lib/page-progress");
 const formatPublicError = require("../../lib/public-error");
+const {
+  addDays,
+  isoDay,
+  today: saoPauloToday,
+} = require("../../lib/sao-paulo-date");
 const createZohoClient = require("../api");
 const { extractZohoRecords } = require("../response");
 const { digitsToNumber, toDateTimeCell } = require("./value-types");
@@ -47,17 +52,155 @@ function applyLeadTypes(row) {
   return typed;
 }
 
-function dateInSaoPaulo(daysAgo) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type) => Number(parts.find((part) => part.type === type)?.value);
-  const date = new Date(Date.UTC(get("year"), get("month") - 1, get("day")));
-  date.setUTCDate(date.getUTCDate() - daysAgo);
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function positiveIntegerOption(value, fallback, name) {
+  const candidate = value === undefined || value === null || value === ""
+    ? fallback
+    : Number(value);
+  if (!Number.isInteger(candidate) || candidate < 1) {
+    throw new Error(`${name} precisa ser inteiro >= 1`);
+  }
+  return candidate;
+}
+
+function parseIsoDayOption(value, name) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`${name} precisa usar YYYY-MM-DD`);
+  const date = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
+  if (isoDay(date) !== text) throw new Error(`${name} invalida`);
   return date;
+}
+
+function booleanOption(value, fallback, name) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "sim"].includes(normalized)) return true;
+  if (["0", "false", "no", "nao", "não"].includes(normalized)) return false;
+  throw new Error(`${name} precisa ser true ou false`);
+}
+
+function formatZohoDate(date) {
+  return `${String(date.getUTCDate()).padStart(2, "0")}-${MONTHS[date.getUTCMonth()]}-${date.getUTCFullYear()}`;
+}
+
+function resolveLeadsWindow(env = process.env, now = new Date()) {
+  const startValue = String(env.ZOHO_LEADS_SHEETS_START_DATE || "").trim();
+  const endValue = String(env.ZOHO_LEADS_SHEETS_END_DATE || "").trim();
+  const today = saoPauloToday(now);
+
+  let startDate;
+  let endDate;
+  let explicit = false;
+  if (startValue || endValue) {
+    if (!startValue || !endValue) {
+      throw new Error(
+        "ZOHO_LEADS_SHEETS_START_DATE e ZOHO_LEADS_SHEETS_END_DATE devem ser informadas juntas",
+      );
+    }
+    explicit = true;
+    startDate = parseIsoDayOption(
+      startValue,
+      "ZOHO_LEADS_SHEETS_START_DATE",
+    );
+    endDate = parseIsoDayOption(endValue, "ZOHO_LEADS_SHEETS_END_DATE");
+  } else {
+    const days = positiveIntegerOption(
+      env.ZOHO_LEADS_SHEETS_DAYS,
+      1,
+      "ZOHO_LEADS_SHEETS_DAYS",
+    );
+    startDate = addDays(today, -days);
+    endDate = addDays(today, -1);
+  }
+
+  if (startDate > endDate) throw new Error("Janela Zoho Leads esta invertida");
+  if (endDate >= today) {
+    throw new Error("ZOHO_LEADS_SHEETS_END_DATE precisa ser anterior a hoje");
+  }
+  return {
+    explicit,
+    days: Math.round((endDate - startDate) / 86400000) + 1,
+    startDate,
+    endDate,
+    startDay: isoDay(startDate),
+    endDay: isoDay(endDate),
+    startZoho: formatZohoDate(startDate),
+    endZoho: formatZohoDate(endDate),
+  };
+}
+
+function parseLeadSheetDay(value) {
+  const text = String(value ?? "").trim().replace(/^'/, "");
+  let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\D|$)/);
+  if (match) {
+    return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+  }
+  match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\D|$)/);
+  if (match) {
+    return `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+  }
+  match = text.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})(?:\D|$)/);
+  if (!match) return null;
+  const month = MONTHS.findIndex(
+    (candidate) => candidate.toLowerCase() === match[2].toLowerCase(),
+  );
+  if (month < 0) return null;
+  return `${match[3]}-${String(month + 1).padStart(2, "0")}-${match[1].padStart(2, "0")}`;
+}
+
+function isLeadDateInWindow(value, startDay, endDay) {
+  const day = parseLeadSheetDay(value);
+  return Boolean(day && day >= startDay && day <= endDay);
+}
+
+function buildLeadsCriteria(window) {
+  return `(Data_e_hora_de_inicio_do_formul_rio >= "${window.startZoho} 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "${window.endZoho} 23:59:59")`;
+}
+
+function dedupeZohoRecordsById(records, dataset = "Zoho Leads") {
+  const unique = new Map();
+  for (const record of records) {
+    if (record?.ID === undefined || record?.ID === null || record?.ID === "") {
+      throw new Error(`${dataset} retornou registro sem ID`);
+    }
+    unique.set(String(record.ID), record);
+  }
+  return [...unique.values()];
+}
+
+function assertNonEmptyWindowReplacement({
+  incomingCount,
+  existingValues,
+  startDay,
+  endDay,
+  allowEmpty,
+}) {
+  if (incomingCount > 0 || allowEmpty) return;
+  const existingCount = (Array.isArray(existingValues) ? existingValues : [])
+    .filter((row) => isLeadDateInWindow(row?.[0], startDay, endDay)).length;
+  if (existingCount > 0) {
+    throw new Error(
+      `Zoho Leads retornou zero registros para uma janela que possui ${existingCount} linhas; substituicao cancelada`,
+    );
+  }
+}
+
+function columnLetter(index) {
+  let value = index + 1;
+  let result = "";
+  while (value > 0) {
+    value--;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
 }
 
 async function run() {
@@ -111,32 +254,12 @@ async function run() {
     const zoho = await createZohoClient();
     secureLog("Autenticação Zoho realizada com sucesso");
 
-    // Cálculo do "Dia de Ontem"
-    // O Zoho espera o formato DD-Mon-YYYY (Ex: 19-Mar-2026)
-    const mesesIngles = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    const dataReferencia = dateInSaoPaulo(1);
+    const window = resolveLeadsWindow(process.env);
+    secureLog(
+      `Filtrando ${window.days} dias concluidos: ${window.startZoho} a ${window.endZoho}`,
+    );
 
-    const dia = String(dataReferencia.getUTCDate()).padStart(2, "0");
-    const mes = mesesIngles[dataReferencia.getUTCMonth()];
-    const ano = dataReferencia.getUTCFullYear();
-
-    const dataFiltro = `${dia}-${mes}-${ano}`;
-    secureLog(`Filtrando registros de ontem (${dataFiltro})`);
-
-    const allProcessed = [];
+    const allRecords = [];
     let fromIndex = 1; // API do Zoho Creator v2 inicia em 1
     const limit = 200;
     let pages = 0;
@@ -148,15 +271,12 @@ async function run() {
     if (!Number.isInteger(maxPages) || maxPages < 1) {
       throw new Error("ZOHO_MAX_PAGES precisa ser inteiro >= 1");
     }
+    const criteria = buildLeadsCriteria(window);
 
     // Loop de Captura de Dados com Critério de Data
     while (true) {
       if (++pages > maxPages) throw new Error("Zoho excedeu o limite seguro de paginas");
       const queryUrl = `https://creator.zoho.com/api/v2/${ZOHO_ACCOUNT_OWNER}/${ZOHO_APP_LINK_NAME}/report/${ZOHO_REPORT_LINK_NAME}`;
-
-      // Critério: Pega registros onde a data de início é IGUAL ao dia de ontem
-      // Usamos >= 00:00:00 e <= 23:59:59 para garantir o dia cheio
-      const criteria = `(Data_e_hora_de_inicio_do_formul_rio >= "${dataFiltro} 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "${dataFiltro} 23:59:59")`;
 
       secureLog(`Buscando registros: índice ${fromIndex}`);
 
@@ -167,15 +287,9 @@ async function run() {
 
         const data = extractZohoRecords(resp, "leads Sheets");
         if (data.length === 0) break;
-        pageTracker.observe(data);
+        pageTracker.observe(dedupeZohoRecordsById(data));
 
-        data.forEach((record) => {
-          // Mapeia os campos conforme o JSON configurado no COLUMN_MAPPING
-          const row = Object.values(mapping).map((zohoKey) =>
-            extractValue(record[zohoKey]),
-          );
-          allProcessed.push(applyLeadTypes(row));
-        });
+        allRecords.push(...data);
 
         if (data.length < limit) break; // Se veio menos que o limite, acabou a base
         fromIndex += limit;
@@ -188,22 +302,43 @@ async function run() {
       }
     }
 
-    const dataBR = `${dia}/${String(dataReferencia.getUTCMonth() + 1).padStart(2, "0")}/${ano}`;
-    const dataDash = `${dia}-${String(dataReferencia.getUTCMonth() + 1).padStart(2, "0")}-${ano}`;
+    const uniqueRecords = dedupeZohoRecordsById(allRecords);
+    const allProcessed = uniqueRecords.map((record) => {
+      const row = Object.values(mapping).map((zohoKey) =>
+        extractValue(record[zohoKey]),
+      );
+      return applyLeadTypes(row);
+    });
+    if (!allProcessed.length) {
+      const dateColumnLetter = columnLetter(dateColumn);
+      const escapedSheetName = SHEET_NAME.replace(/'/g, "''");
+      const existingDates = await sheets.getValues(
+        `'${escapedSheetName}'!${dateColumnLetter}2:${dateColumnLetter}`,
+      );
+      assertNonEmptyWindowReplacement({
+        incomingCount: 0,
+        existingValues: existingDates,
+        startDay: window.startDay,
+        endDay: window.endDay,
+        allowEmpty: booleanOption(
+          process.env.ZOHO_LEADS_SHEETS_ALLOW_EMPTY_REPLACEMENT,
+          false,
+          "ZOHO_LEADS_SHEETS_ALLOW_EMPTY_REPLACEMENT",
+        ),
+      });
+    }
     const result = await sheets.replaceRows({
       sheetTitle: SHEET_NAME,
       columnRange: "A:AC",
       header: headers,
       newRows: allProcessed,
       matchColumnIndexes: [dateColumn],
-      shouldReplace: (row) => {
-        const value = String(row[dateColumn] || "");
-        return (
-          value.startsWith(dataBR) ||
-          value.startsWith(dataDash) ||
-          value.startsWith(dataFiltro)
-        );
-      },
+      shouldReplace: (row) =>
+        isLeadDateInWindow(
+          row[dateColumn],
+          window.startDay,
+          window.endDay,
+        ),
     });
     secureLog(
       `Processo concluído: ${result.removed} removidas e ${result.inserted} inseridas`,
@@ -216,6 +351,11 @@ async function run() {
 
 run.applyLeadTypes = applyLeadTypes;
 run.extractValue = extractValue;
+run.resolveLeadsWindow = resolveLeadsWindow;
+run.isLeadDateInWindow = isLeadDateInWindow;
+run.buildLeadsCriteria = buildLeadsCriteria;
+run.dedupeZohoRecordsById = dedupeZohoRecordsById;
+run.assertNonEmptyWindowReplacement = assertNonEmptyWindowReplacement;
 module.exports = run;
 
 if (require.main === module) {

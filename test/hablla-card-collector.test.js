@@ -149,6 +149,32 @@ test("updated_at pagina a API, mas somente created_at define a janela", async ()
   assert.equal(hablla.calls.length, 2);
 });
 
+test("modo exaustivo ignora paginas sem created_at recente ate a fronteira segura", async () => {
+  const hablla = fakeHablla([
+    [
+      card("old-1", "2026-07-12T12:00:00.000Z", "2026-06-01T00:00:00.000Z"),
+      card("old-2", "2026-07-12T11:00:00.000Z", "2026-06-02T00:00:00.000Z"),
+    ],
+    [
+      card("old-3", "2026-07-12T10:00:00.000Z", "2026-06-03T00:00:00.000Z"),
+      card("old-4", "2026-07-12T09:00:00.000Z", "2026-06-04T00:00:00.000Z"),
+    ],
+    [
+      card("recent-1", "2026-07-11T08:00:00.000Z", "2026-07-08T00:00:00.000Z"),
+      card("recent-2", "2026-07-10T07:00:00.000Z", "2026-07-09T00:00:00.000Z"),
+    ],
+    [
+      card("before-1", "2026-07-06T23:00:00.000Z", "2026-06-05T00:00:00.000Z"),
+      card("before-2", "2026-07-06T22:00:00.000Z", "2026-06-06T00:00:00.000Z"),
+    ],
+  ]);
+
+  const cards = await collect(hablla, { exhaustive: true });
+
+  assert.deepEqual(cards.map(({ id }) => id), ["recent-1", "recent-2"]);
+  assert.equal(hablla.calls.length, 4);
+});
+
 test("cards exigem id, created_at e updated_at coerentes", async () => {
   await assert.rejects(
     collect(fakeHablla([[card("", "2026-07-10T00:00:00.000Z")]])),
@@ -185,7 +211,7 @@ test("fingerprint impede loop de pagina repetida", async () => {
   assert.equal(hablla.calls.length, 2);
 });
 
-test("fallback desordenado respeita o teto de paginas", async () => {
+test("ordem updated_at diferente da solicitada interrompe a coleta", async () => {
   const hablla = fakeHablla([
     [
       card("recent-1", "2026-07-09T00:00:00.000Z"),
@@ -197,11 +223,8 @@ test("fallback desordenado respeita o teto de paginas", async () => {
     ],
   ]);
 
-  await assert.rejects(
-    collect(hablla, { maxPages: 2 }),
-    /limite seguro de 2 paginas/,
-  );
-  assert.equal(hablla.calls.length, 2);
+  await assert.rejects(collect(hablla, { exhaustive: true }), /ordem updated_at desc/);
+  assert.equal(hablla.calls.length, 1);
 });
 
 test("limite padrao permanece em 2000 paginas", () => {

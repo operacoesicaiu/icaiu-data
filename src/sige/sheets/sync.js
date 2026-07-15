@@ -1,17 +1,12 @@
 const GoogleSheets = require("../../google/sheets");
 const formatPublicError = require("../../lib/public-error");
 const {
+  TIME_ZONE,
   addDays,
   isoDay,
   today: saoPauloToday,
 } = require("../../lib/sao-paulo-date");
 const { listSigeOrdersForDay } = require("../api");
-
-// ================================
-// CONFIG
-// ================================
-
-const DIAS_REPROCESSAR = 5;
 
 // ================================
 // UTILITÁRIOS
@@ -24,10 +19,125 @@ function secureLog(message, isError = false) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function formatarDataBR(dataInput) {
-  if (!dataInput) return "";
+function positiveIntegerOption(value, fallback, name) {
+  const candidate = value === undefined || value === null || value === ""
+    ? fallback
+    : Number(value);
+  if (!Number.isInteger(candidate) || candidate < 1) {
+    throw new Error(`${name} precisa ser inteiro >= 1`);
+  }
+  return candidate;
+}
 
-  return new Date(dataInput).toLocaleDateString("pt-BR");
+function completedDayWindow(value, now = new Date()) {
+  const days = positiveIntegerOption(value, 5, "SIGE_SHEETS_DAYS");
+  const today = saoPauloToday(now);
+  return {
+    days,
+    startDate: addDays(today, -days),
+    endDate: addDays(today, -1),
+  };
+}
+
+function parseIsoDayOption(value, name) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`${name} precisa usar YYYY-MM-DD`);
+  const date = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
+  if (isoDay(date) !== text) throw new Error(`${name} invalida`);
+  return date;
+}
+
+function booleanOption(value, fallback, name) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "sim"].includes(normalized)) return true;
+  if (["0", "false", "no", "nao", "não"].includes(normalized)) return false;
+  throw new Error(`${name} precisa ser true ou false`);
+}
+
+function resolveSigeWindow(env = process.env, now = new Date()) {
+  const startValue = String(env.SIGE_SHEETS_START_DATE || "").trim();
+  const endValue = String(env.SIGE_SHEETS_END_DATE || "").trim();
+  const today = saoPauloToday(now);
+
+  if (startValue || endValue) {
+    if (!startValue || !endValue) {
+      throw new Error(
+        "SIGE_SHEETS_START_DATE e SIGE_SHEETS_END_DATE devem ser informadas juntas",
+      );
+    }
+    const startDate = parseIsoDayOption(startValue, "SIGE_SHEETS_START_DATE");
+    const endDate = parseIsoDayOption(endValue, "SIGE_SHEETS_END_DATE");
+    if (startDate > endDate) throw new Error("Janela SIGE esta invertida");
+    if (endDate >= today) {
+      throw new Error("SIGE_SHEETS_END_DATE precisa ser anterior a hoje");
+    }
+    return {
+      explicit: true,
+      days: Math.round((endDate - startDate) / 86400000) + 1,
+      startDate,
+      endDate,
+    };
+  }
+
+  return { explicit: false, ...completedDayWindow(env.SIGE_SHEETS_DAYS, now) };
+}
+
+function assertNonEmptyWindowReplacement({
+  incomingCount,
+  existingValues,
+  startDate,
+  endDate,
+  allowEmpty,
+}) {
+  if (incomingCount > 0 || allowEmpty) return;
+  const existingCount = (Array.isArray(existingValues) ? existingValues : [])
+    .filter((row) => isFaturamentoRowInWindow(["", "", "", row?.[0]], startDate, endDate))
+    .length;
+  if (existingCount > 0) {
+    throw new Error(
+      `SIGE retornou zero registros para uma janela que possui ${existingCount} linhas; substituicao cancelada`,
+    );
+  }
+}
+
+function sigeBusinessDay(dataInput) {
+  if (!dataInput) return null;
+  const text = String(dataInput).trim();
+  const naiveIso = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?)$/,
+  );
+  if (naiveIso) {
+    return `${naiveIso[1]}-${naiveIso[2]}-${naiveIso[3]}`;
+  }
+
+  const instant = dataInput instanceof Date ? dataInput : new Date(dataInput);
+  if (Number.isNaN(instant.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant);
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function formatarDataBR(dataInput) {
+  const day = sigeBusinessDay(dataInput);
+  if (!day) return "";
+  const [year, month, date] = day.split("-");
+  return `${date}/${month}/${year}`;
+}
+
+function formatarMesBR(dataInput) {
+  const day = sigeBusinessDay(dataInput);
+  if (!day) return "";
+  const [year, month] = day.split("-");
+  return `${month}/${year}`;
 }
 
 function dateToExcelSerial(dateStr) {
@@ -284,11 +394,16 @@ async function run() {
     // RANGE DE DATAS
     // ================================
 
-    const hoje = saoPauloToday();
-    const ontem = addDays(hoje, -1);
-    const inicio = addDays(hoje, -DIAS_REPROCESSAR);
+    const window = resolveSigeWindow(process.env);
+    const {
+      days: reprocessDays,
+      startDate: inicio,
+      endDate: ontem,
+    } = window;
 
-    secureLog(`Reprocessando últimos ${DIAS_REPROCESSAR} dias.`);
+    secureLog(
+      `Reprocessando ${reprocessDays} dias concluidos: ${isoDay(inicio)} a ${isoDay(ontem)}.`,
+    );
 
     // ================================
     // CARREGA ERP
@@ -351,7 +466,11 @@ async function run() {
         let serialRetirada = "";
         let respRetirada = "Sem vendedor";
 
-        const dataVenda = new Date(p.DataFaturamento || p.Data);
+        const dataVendaInput = p.DataFaturamento || p.Data;
+        const dataVenda = new Date(dataVendaInput);
+        if (Number.isNaN(dataVenda.getTime())) {
+          throw new Error("SIGE retornou pedido com data de faturamento invalida");
+        }
 
         const valorTotal = Number(p.ValorFinal || 0);
 
@@ -399,7 +518,7 @@ async function run() {
           "",
           p.Codigo,
           p.StatusSistema || "",
-          GoogleSheets.dateCell(formatarDataBR(dataVenda), {
+          GoogleSheets.dateCell(formatarDataBR(dataVendaInput), {
             pattern: "dd/MM/yyyy",
           }),
           p.Cliente || "",
@@ -416,7 +535,7 @@ async function run() {
           respRetirada,
           serialRetirada !== "" ? valorTotal * 0.5 : 0,
           GoogleSheets.monthCell(
-            `${String(dataVenda.getMonth() + 1).padStart(2, "0")}/${dataVenda.getFullYear()}`,
+            formatarMesBR(dataVendaInput),
             { pattern: "m/yyyy" },
           ),
         ]);
@@ -450,6 +569,20 @@ async function run() {
     secureLog(
       `Deduplicacao SIGE na coleta: repetidos removidos=${collectedRows.length - uniqueRows.length}.`,
     );
+    if (!uniqueRows.length) {
+      const existingDates = await sheets.getValues("Faturamento!D2:D");
+      assertNonEmptyWindowReplacement({
+        incomingCount: 0,
+        existingValues: existingDates,
+        startDate: inicio,
+        endDate: ontem,
+        allowEmpty: booleanOption(
+          process.env.SIGE_SHEETS_ALLOW_EMPTY_REPLACEMENT,
+          false,
+          "SIGE_SHEETS_ALLOW_EMPTY_REPLACEMENT",
+        ),
+      });
+    }
     const result = await sheets.replaceRows({
       sheetTitle: "Faturamento",
       columnRange: "A:R",
@@ -462,12 +595,18 @@ async function run() {
       `${result.removed} registros substituidos por ${result.inserted}.`,
     );
 
-    const cleanup = await cleanupGlobalDocumentDuplicates(sheets);
-    secureLog(
-      `Deduplicacao SIGE global: ${cleanup.removed} linhas anteriores removidas${
-        cleanup.recoveredAmbiguousWrite ? " apos validacao de resposta ambigua" : ""
-      }.`,
-    );
+    if (window.explicit) {
+      secureLog(
+        "Deduplicacao SIGE global ignorada no backfill explicito para preservar linhas fora da janela.",
+      );
+    } else {
+      const cleanup = await cleanupGlobalDocumentDuplicates(sheets);
+      secureLog(
+        `Deduplicacao SIGE global: ${cleanup.removed} linhas anteriores removidas${
+          cleanup.recoveredAmbiguousWrite ? " apos validacao de resposta ambigua" : ""
+        }.`,
+      );
+    }
 
     secureLog("Processo finalizado com sucesso.");
   } catch (err) {
@@ -484,6 +623,11 @@ module.exports.cleanupGlobalDocumentDuplicates = cleanupGlobalDocumentDuplicates
 module.exports.documentDeleteRequests = documentDeleteRequests;
 module.exports.duplicateDocumentIndexes = duplicateDocumentIndexes;
 module.exports.isFaturamentoRowInWindow = isFaturamentoRowInWindow;
+module.exports.completedDayWindow = completedDayWindow;
+module.exports.resolveSigeWindow = resolveSigeWindow;
+module.exports.assertNonEmptyWindowReplacement = assertNonEmptyWindowReplacement;
+module.exports.formatarDataBR = formatarDataBR;
+module.exports.formatarMesBR = formatarMesBR;
 
 if (require.main === module) {
   run().catch(() => {

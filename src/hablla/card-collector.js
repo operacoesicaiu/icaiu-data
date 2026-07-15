@@ -87,6 +87,7 @@ async function collectHabllaCards({
   cutoff,
   maxPages = process.env.HABLLA_CARDS_MAX_PAGES,
   pageSize = DEFAULT_PAGE_SIZE,
+  exhaustive = false,
   pagesWithoutRecentCreated =
     process.env.HABLLA_CARDS_PAGES_WITHOUT_RECENT_CREATED,
 }) {
@@ -116,6 +117,7 @@ async function collectHabllaCards({
   const cardsById = new Map();
   const pageFingerprints = new Set();
   let consecutivePagesWithoutRecentCreated = 0;
+  let previousUpdatedAt = Number.POSITIVE_INFINITY;
   let completed = false;
 
   for (let page = 1; page <= safeMaxPages; page++) {
@@ -154,6 +156,12 @@ async function collectHabllaCards({
       throw new Error("Hablla repetiu uma pagina de cards");
     }
     pageFingerprints.add(fingerprint);
+    for (const { updatedAt } of validatedCards) {
+      if (updatedAt > previousUpdatedAt) {
+        throw new Error("Hablla retornou cards fora da ordem updated_at desc");
+      }
+      previousUpdatedAt = updatedAt;
+    }
 
     const pageHasRecentCreated = validatedCards.some(
       ({ createdAt }) => createdAt >= cutoffTimestamp,
@@ -168,15 +176,25 @@ async function collectHabllaCards({
       }
     }
 
-    consecutivePagesWithoutRecentCreated = pageHasRecentCreated
-      ? 0
-      : consecutivePagesWithoutRecentCreated + 1;
-    if (
-      consecutivePagesWithoutRecentCreated >=
-      safePagesWithoutRecentCreated
-    ) {
-      completed = true;
-      break;
+    if (exhaustive) {
+      // created_at nunca pode ser posterior a updated_at. Com a ordenacao
+      // validada, uma pagina inteira anterior ao corte prova que nenhuma
+      // pagina seguinte pode conter um card criado dentro da janela.
+      if (validatedCards.every(({ updatedAt }) => updatedAt < cutoffTimestamp)) {
+        completed = true;
+        break;
+      }
+    } else {
+      consecutivePagesWithoutRecentCreated = pageHasRecentCreated
+        ? 0
+        : consecutivePagesWithoutRecentCreated + 1;
+      if (
+        consecutivePagesWithoutRecentCreated >=
+        safePagesWithoutRecentCreated
+      ) {
+        completed = true;
+        break;
+      }
     }
     if (cards.length < safePageSize) {
       completed = true;

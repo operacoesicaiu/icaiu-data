@@ -5,6 +5,141 @@ const GoogleSheets = require("../src/google/sheets");
 const scheduling = require("../src/zoho/sheets/scheduling");
 const leads = require("../src/zoho/sheets/leads");
 
+const NOW = new Date("2026-07-15T15:00:00Z");
+
+test("Zoho Leads usa janela concluida, criterio inclusivo e datas explicitas prioritarias", () => {
+  const standard = leads.resolveLeadsWindow({}, NOW);
+  assert.equal(standard.startDay, "2026-07-14");
+  assert.equal(standard.endDay, "2026-07-14");
+
+  const july = leads.resolveLeadsWindow({
+    ZOHO_LEADS_SHEETS_DAYS: "1",
+    ZOHO_LEADS_SHEETS_START_DATE: "2026-07-01",
+    ZOHO_LEADS_SHEETS_END_DATE: "2026-07-14",
+  }, NOW);
+  assert.equal(july.days, 14);
+  assert.equal(july.startDay, "2026-07-01");
+  assert.equal(july.endDay, "2026-07-14");
+  assert.equal(
+    leads.buildLeadsCriteria(july),
+    '(Data_e_hora_de_inicio_do_formul_rio >= "01-Jul-2026 00:00:00" && Data_e_hora_de_inicio_do_formul_rio <= "14-Jul-2026 23:59:59")',
+  );
+  for (const value of [
+    "01/07/2026 00:00:00",
+    "14-07-2026 23:59:59",
+    "14-Jul-2026 07:47:00",
+  ]) {
+    assert.equal(
+      leads.isLeadDateInWindow(value, july.startDay, july.endDay),
+      true,
+    );
+  }
+  assert.equal(
+    leads.isLeadDateInWindow(
+      "15/07/2026 00:00:00",
+      july.startDay,
+      july.endDay,
+    ),
+    false,
+  );
+});
+
+test("Zoho Leads deduplica por ID e protege janela existente contra retorno vazio", () => {
+  const first = { ID: "1", marker: "antigo" };
+  const only = { ID: "2", marker: "unico" };
+  const last = { ID: "1", marker: "novo" };
+  assert.deepEqual(leads.dedupeZohoRecordsById([first, only, last]), [last, only]);
+  assert.throws(() => leads.dedupeZohoRecordsById([{}]), /sem ID/);
+
+  const options = {
+    incomingCount: 0,
+    existingValues: [["14/07/2026 07:47:00"]],
+    startDay: "2026-07-01",
+    endDay: "2026-07-14",
+    allowEmpty: false,
+  };
+  assert.throws(
+    () => leads.assertNonEmptyWindowReplacement(options),
+    /substituicao cancelada/,
+  );
+  assert.doesNotThrow(() =>
+    leads.assertNonEmptyWindowReplacement({ ...options, allowEmpty: true }),
+  );
+  assert.throws(
+    () => leads.resolveLeadsWindow({
+      ZOHO_LEADS_SHEETS_START_DATE: "2026-07-01",
+      ZOHO_LEADS_SHEETS_END_DATE: "2026-07-15",
+    }, NOW),
+    /anterior a hoje/,
+  );
+});
+
+test("Zoho Scheduling preserva o default e permite dias concluidos ou datas explicitas", () => {
+  const historical = scheduling.resolveSchedulingWindow({}, NOW);
+  assert.equal(historical.mode, "historical-default");
+  assert.equal(historical.startDay, "2026-06-01");
+  assert.equal(historical.endDay, "2026-07-15");
+
+  const completed = scheduling.resolveSchedulingWindow({
+    ZOHO_SCHEDULING_SHEETS_DAYS: "14",
+  }, NOW);
+  assert.equal(completed.mode, "completed-days");
+  assert.equal(completed.startDay, "2026-07-01");
+  assert.equal(completed.endDay, "2026-07-14");
+
+  const explicit = scheduling.resolveSchedulingWindow({
+    ZOHO_SCHEDULING_SHEETS_DAYS: "1",
+    ZOHO_SCHEDULING_SHEETS_START_DATE: "2026-07-03",
+    ZOHO_SCHEDULING_SHEETS_END_DATE: "2026-07-10",
+  }, NOW);
+  assert.equal(explicit.mode, "explicit");
+  assert.equal(explicit.startDay, "2026-07-03");
+  assert.equal(explicit.endDay, "2026-07-10");
+  assert.equal(
+    scheduling.buildSchedulingCriteria(explicit),
+    '(Data_e_hora_de_inicio_do_formulario >= "03-Jul-2026 00:00:00" && Data_e_hora_de_inicio_do_formulario <= "10-Jul-2026 23:59:59")',
+  );
+});
+
+test("Zoho Scheduling deduplica IDs, rejeita hoje e protege retorno vazio", () => {
+  const first = { ID: "1", marker: "antigo" };
+  const only = { ID: "2", marker: "unico" };
+  const last = { ID: "1", marker: "novo" };
+  assert.deepEqual(
+    scheduling.dedupeZohoRecordsById([first, only, last]),
+    [last, only],
+  );
+  assert.throws(() => scheduling.dedupeZohoRecordsById([{}]), /sem ID/);
+  assert.throws(
+    () => scheduling.resolveSchedulingWindow({
+      ZOHO_SCHEDULING_SHEETS_START_DATE: "2026-07-01",
+      ZOHO_SCHEDULING_SHEETS_END_DATE: "2026-07-15",
+    }, NOW),
+    /anterior a hoje/,
+  );
+
+  const window = scheduling.resolveSchedulingWindow({
+    ZOHO_SCHEDULING_SHEETS_DAYS: "14",
+  }, NOW);
+  const options = {
+    incomingCount: 0,
+    existingValues: [["14/Jul/2026"]],
+    startDate: window.startDate,
+    endDate: window.endDate,
+    allowEmpty: false,
+  };
+  assert.throws(
+    () => scheduling.assertNonEmptyWindowReplacement(options),
+    /substituicao cancelada/,
+  );
+  assert.doesNotThrow(() =>
+    scheduling.assertNonEmptyWindowReplacement({
+      ...options,
+      allowEmpty: true,
+    }),
+  );
+});
+
 test("Zoho Scheduling aplica apenas os tipos históricos nas colunas previstas", () => {
   const row = Array.from({ length: 34 }, (_, index) => `campo-${index}`);
   row[0] = "5511999999999";

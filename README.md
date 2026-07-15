@@ -77,6 +77,7 @@ icaiu-data/
 │   │   ├── api.js
 │   │   ├── attendant-rows.js      # identidade composta e reconciliação
 │   │   ├── card-collector.js
+│   │   ├── card-sheet-schema.js   # contrato fixo A:S e colunas descobertas
 │   │   ├── date-range.js
 │   │   ├── response-contracts.js
 │   │   ├── sheets/sync.js
@@ -128,7 +129,7 @@ As rotinas “Recent” mantêm as mudanças frequentes com baixa latência; as 
 
 ## Atualização segura das planilhas
 
-Uma sincronização não apaga a base inteira. Cada módulo identifica as linhas da janela atual — por data e/ou ID —, preserva as demais e grava a substituição em uma única operação do Google Sheets.
+Uma sincronização não apaga a base inteira. Cada módulo identifica as linhas da janela atual — por data e/ou ID — e preserva as demais. Para a base grande de cards, os novos dados são preparados e validados em uma aba temporária oculta; a promoção faz as exclusões estruturais e a cópia em uma única operação atômica no Google Sheets.
 
 ```mermaid
 sequenceDiagram
@@ -138,28 +139,31 @@ sequenceDiagram
 
     Sync->>API: Coletar e validar páginas
     API-->>Sync: Registros normalizados
-    Sync->>Sheets: Ler cabeçalho e colunas seletoras
-    Sync->>Sheets: Reler estado imediatamente antes da escrita
+    Sync->>Sheets: Ler cabeçalho, dados e colunas seletoras
+    Sync->>Sheets: Preparar novos rows em staging oculta
+    Sync->>Sheets: Validar staging e reler o original
     alt estado mudou por outro escritor
-        Sync-->>Sync: Interromper sem sobrescrever
+        Sync->>Sheets: Remover staging
+        Sync-->>Sync: Interromper sem promover
     else estado estável
-        Sync->>Sheets: batchUpdate atômico: cabeçalho + exclusões de baixo para cima + inclusão
-        Sync->>Sheets: Reler linhas alvo completas e colunas seletoras
+        Sync->>Sheets: batchUpdate atômico: exclusões + cabeçalho + promoção
+        Sync->>Sheets: Reler e validar o estado final
         Sheets-->>Sync: Estado final
-        Sync-->>Sync: Conferir cabeçalho, alvo completo e projeção preservada
+        Sync->>Sheets: Remover staging
     end
 ```
 
 Proteções importantes:
 
 - exclusões são agrupadas e executadas **de baixo para cima**, evitando deslocamento incorreto dos índices;
+- as exclusões continuam estruturais na aba original, para que fórmulas, ranges e colunas auxiliares acompanhem o deslocamento das linhas;
 - o cabeçalho e a largura de todas as linhas são conferidos antes da escrita;
 - uma mudança concorrente detectada entre as leituras aborta a operação;
 - a pós-validação compara todas as colunas das linhas gravadas e, fora do alvo, confere quantidade, ordem e hash das colunas seletoras;
 - escritas ambíguas não são repetidas cegamente: primeiro o estado final é lido e validado;
 - Apps Script ou outro escritor legítimo pode alterar a planilha depois de uma execução bem-sucedida; por isso uma comparação posterior deve considerar o horário de cada gravação.
 
-Strings são gravadas como texto literal, sem apóstrofo visível e sem permitir execução de fórmulas. Campos que historicamente eram datas, horas, booleanos ou números continuam com esses tipos no Sheets. A `Base Cliente` conserva o contrato de 17 colunas; descrições pertencem a `Outros Campos`. No SIGE, a janela é substituída e a deduplicação global pela coluna J remove somente ocorrências anteriores, preservando fisicamente a última linha.
+Strings são gravadas como texto literal, sem apóstrofo visível e sem permitir execução de fórmulas. Campos que historicamente eram datas, horas, booleanos ou números continuam com esses tipos no Sheets. A `Base Hablla Card` mantém exatamente as 19 colunas históricas de A:S e acrescenta, somente depois delas, `card.<campo>` para propriedades ainda não representadas e `custom_field.<id>` para cada campo personalizado descoberto. Colunas já criadas nunca mudam de posição nem desaparecem. A `Base Cliente` conserva o contrato de 17 colunas; descrições pertencem a `Outros Campos`. No SIGE, a janela é substituída e a deduplicação global pela coluna J remove somente ocorrências anteriores, preservando fisicamente a última linha.
 
 ## Paginação eficiente do Hablla
 
@@ -169,18 +173,24 @@ Cards são solicitados com `order=updated_at`, `direction=desc` e corte temporal
 flowchart TD
     P[Buscar página de 50 cards] --> V{Resposta, IDs, created_at<br/>e updated_at válidos?}
     V -- não --> F[Falhar sem gravar]
-    V -- sim --> C{Há created_at dentro da janela?}
+    V -- sim --> O{updated_at continua<br/>em ordem decrescente?}
+    O -- não --> F
+    O -- sim --> M{Modo de coleta}
+    M -- rotina rápida --> C{Há created_at dentro da janela?}
     C -- sim --> Z[Zerar contador sem recentes]
     C -- não --> I[Incrementar contador]
     Z --> N{Página curta ou vazia?}
     I --> D{Duas páginas consecutivas?}
     D -- sim --> E[Encerrar paginação]
     D -- não --> N
+    M -- recuperação exaustiva --> U{Página inteira tem updated_at<br/>anterior ao corte?}
+    U -- sim --> E
+    U -- não --> N
     N -- sim --> E
     N -- não --> P
 ```
 
-O coletor restaura a regra histórica mais conservadora: encerra após **duas páginas consecutivas** sem criações recentes e zera o contador ao encontrar uma. Ele deduplica por ID preservando a versão com `updated_at` mais recente, detecta página repetida e falha se atingir `HABLLA_CARDS_MAX_PAGES`; o teto nunca é interpretado como coleta completa.
+Na rotina quatro vezes ao dia, o coletor preserva o corte rápido histórico: encerra após **duas páginas consecutivas** sem criações recentes e zera o contador ao encontrar uma. Em uma recuperação controlada, `HABLLA_CARDS_EXHAUSTIVE=true` ignora esse atalho e só encerra quando a ordem validada prova uma fronteira temporal segura. Múltiplas passagens podem ser consolidadas por ID para reduzir o risco causado por uma API que muda durante uma leitura longa. Em ambos os modos, ele preserva a versão com `updated_at` mais recente, detecta página repetida e falha se atingir `HABLLA_CARDS_MAX_PAGES`; o teto nunca é interpretado como coleta completa.
 
 ## Resiliência e idempotência
 
@@ -272,16 +282,41 @@ GOOGLE_SHEETS_READ_TIMEOUT_MS
 GOOGLE_SHEETS_READ_MAX_ATTEMPTS
 SUPABASE_BATCH_SIZE
 SUPABASE_MAX_ATTEMPTS
+HABLLA_CARDS_DAYS
 HABLLA_CLIENTS_MAX_PAGES
 HABLLA_ATTENDANTS_DAYS
+HABLLA_CARDS_EXHAUSTIVE
+HABLLA_CARDS_CRAWL_PASSES
+HABLLA_CARDS_CRAWL_ATTEMPTS
+HABLLA_CARDS_PRESERVE_UNFETCHED
+HABLLA_SHEETS_DATASETS
+HABLLA_SHEETS_ATTENDANTS_DAYS
+HABLLA_SHEETS_CLIENTS_DAYS
+HABLLA_SHEETS_ALLOW_EMPTY_REPLACEMENT
 HABLLA_MIN_INTERVAL_MS
 HABLLA_REQUEST_TIMEOUT_MS
 HABLLA_MAX_ATTEMPTS
+GOOGLE_SHEETS_STAGING_CHUNK_ROWS
+GOOGLE_SHEETS_STAGING_CHUNK_BYTES
+GOOGLE_SHEETS_STAGING_CHUNK_INTERVAL_MS
+GOOGLE_SHEETS_PROMOTION_MAX_BYTES
 SYNC_SCRIPT_MAX_ATTEMPTS
 SIGE_MIN_INTERVAL_MS
 SIGE_MAX_RECORDS_PER_DAY
+SIGE_SHEETS_DAYS
+SIGE_SHEETS_START_DATE / SIGE_SHEETS_END_DATE
+SIGE_SHEETS_ALLOW_EMPTY_REPLACEMENT
 ZENVIA_REQUEST_DELAY_MS
+ZENVIA_SHEETS_DAYS
+ZENVIA_SHEETS_START_DATE / ZENVIA_SHEETS_END_DATE
+ZENVIA_SHEETS_ALLOW_EMPTY_REPLACEMENT
 ZOHO_MAX_PAGES
+ZOHO_LEADS_SHEETS_DAYS
+ZOHO_LEADS_SHEETS_START_DATE / ZOHO_LEADS_SHEETS_END_DATE
+ZOHO_LEADS_SHEETS_ALLOW_EMPTY_REPLACEMENT
+ZOHO_SCHEDULING_SHEETS_DAYS
+ZOHO_SCHEDULING_SHEETS_START_DATE / ZOHO_SCHEDULING_SHEETS_END_DATE
+ZOHO_SCHEDULING_SHEETS_ALLOW_EMPTY_REPLACEMENT
 ```
 
 Não aumente limites ou tentativas apenas para esconder uma falha recorrente; primeiro confirme contrato da API, paginação, cota e tempo de execução.
@@ -321,6 +356,8 @@ node src/sheets/run.js zoho/sheets/scheduling.js
 
 > [!CAUTION]
 > Os comandos de integração fazem chamadas e escritas reais. Antes de executá-los, use somente o `.env` da iCaiu, registre uma fotografia sem dados sensíveis — contagem, largura e hash — e compare novamente após a execução.
+
+Uma recuperação histórica deve ser local e limitar o destino a cards com `HABLLA_SHEETS_DATASETS=cards`. Use `HABLLA_CARDS_EXHAUSTIVE=true` e duas passagens; não salve o modo exaustivo como padrão do workflow agendado. `HABLLA_CARDS_PRESERVE_UNFETCHED=true` é o padrão seguro tanto na rotina rápida quanto na recuperação: a sincronização substitui os IDs efetivamente coletados e não apaga um card apenas porque uma leitura parcial não o devolveu. O trade-off é conservar também um card removido na origem; use `false` somente após uma coleta exaustiva validada e uma fotografia do destino. A rotina de produção continua rápida e reutiliza automaticamente as colunas adicionais descobertas no backfill.
 
 A suíte automatizada cobre contratos de resposta, paginação, retries, autenticação Google, integridade da substituição no Sheets, `upsert` e observabilidade. Ela reduz risco de regressão, mas não substitui uma execução real verde nem a comparação antes/depois das bases. Os badges no topo mostram o estado mais recente publicado no GitHub Actions.
 

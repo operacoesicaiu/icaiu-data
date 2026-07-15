@@ -1,11 +1,18 @@
 const crypto = require("crypto");
 const axios = require("axios");
 const { getGoogleAccessToken } = require("./auth");
-const { backoffMs, isRetryableNetworkError, isRetryableStatus, sleep } = require("../lib/http-retry");
+const {
+  RateGate,
+  backoffMs,
+  isRetryableNetworkError,
+  isRetryableStatus,
+  sleep,
+} = require("../lib/http-retry");
 
 const SHEETS_BASE_URL = "https://sheets.googleapis.com/v4/spreadsheets";
 const GOOGLE_SHEETS_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const MAX_SPREADSHEET_CELLS = 10_000_000;
 const TYPED_DATE_CELL = Symbol("typedDateCell");
 const TYPED_DATE_TEXT = Symbol("typedDateText");
 
@@ -32,6 +39,11 @@ function encodeRange(range) {
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function dateParts(text, withTime) {
@@ -206,41 +218,60 @@ function canonicalCell(value) {
   return ["string", String(value).replace(/\r\n/g, "\n")];
 }
 
-function secureStateHash(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
 function canonicalRow(row, width) {
   return Array.from({ length: width }, (_, index) => canonicalCell(row[index]));
 }
 
+function rowsHash(rows, width, canonicalizeCell) {
+  const hash = crypto.createHash("sha256");
+  hash.update(JSON.stringify([rows.length, width]));
+  for (const row of rows) {
+    hash.update("\n");
+    hash.update(
+      JSON.stringify(
+        Array.from(
+          { length: width },
+          (_, index) => canonicalizeCell(row[index]),
+        ),
+      ),
+    );
+  }
+  return hash.digest("hex");
+}
+
 function completeRowsHash(rows, width) {
-  return secureStateHash(rows.map((row) => canonicalRow(row, width)));
+  return rowsHash(rows, width, canonicalCell);
 }
 
 function preservedRowsHash(rows, width) {
-  return secureStateHash(
-    rows.map((row) =>
-      Array.from({ length: width }, (_, index) => {
-        const value = row[index];
-        // Deleting rows makes Google rewrite relative references (for example,
-        // =B10 becomes =B9). The formula cell is still preserved, so compare
-        // its presence while keeping exact comparison for every literal value.
-        if (typeof value === "string" && value.startsWith("=")) {
-          return ["formula"];
-        }
-        return canonicalCell(value);
-      }),
-    ),
-  );
+  return rowsHash(rows, width, (value) => {
+    // Deleting rows makes Google rewrite relative references (for example,
+    // =B10 becomes =B9). The formula cell is still preserved, so compare
+    // its presence while keeping exact comparison for every literal value.
+    if (typeof value === "string" && value.startsWith("=")) {
+      return ["formula"];
+    }
+    return canonicalCell(value);
+  });
 }
 
 function selectorSnapshotHash(state, indexes, headerWidth) {
-  return secureStateHash({
-    hasHeader: state.hasHeader,
-    header: canonicalRow(state.first, headerWidth),
-    rows: state.body.map((row) => indexes.map((index) => canonicalCell(row[index]))),
-  });
+  const hash = crypto.createHash("sha256");
+  hash.update(
+    JSON.stringify({
+      hasHeader: state.hasHeader,
+      header: canonicalRow(state.first, headerWidth),
+      rowCount: state.body.length,
+      indexes,
+    }),
+  );
+  for (const row of state.body) {
+    hash.update("\n");
+    hash.update(
+      JSON.stringify(indexes.map((index) => canonicalCell(row[index]))),
+    );
+  }
+  return hash.digest("hex");
 }
 
 function rowHasContent(row) {
@@ -332,6 +363,73 @@ function numberFormatRange(quotedTitle, block) {
 
 function sameNumberFormat(actual, expected) {
   return actual?.type === expected.type && actual?.pattern === expected.pattern;
+}
+
+function quoteSheetTitle(title) {
+  return `'${String(title).replace(/'/g, "''")}'`;
+}
+
+function allocateStagingSheetId(propertiesByTitle) {
+  const usedIds = new Set(
+    Object.values(propertiesByTitle).map((properties) => properties.sheetId),
+  );
+  let candidate = crypto.randomInt(1, 2_000_000_000);
+  while (usedIds.has(candidate)) {
+    candidate = candidate === 1_999_999_999 ? 1 : candidate + 1;
+  }
+  return candidate;
+}
+
+function stateSnapshot(state, matchColumnIndexes, width) {
+  return {
+    selectorHash: selectorSnapshotHash(
+      state,
+      matchColumnIndexes,
+      width,
+    ),
+    completeHash: completeRowsHash(state.completeBody, width),
+  };
+}
+
+function stateMatchesSnapshot(state, snapshot, matchColumnIndexes, width) {
+  return (
+    selectorSnapshotHash(state, matchColumnIndexes, width) ===
+      snapshot.selectorHash &&
+    completeRowsHash(state.completeBody, width) === snapshot.completeHash
+  );
+}
+
+function* stagingRowChunks(rows, width, { maxRows, maxBytes }) {
+  let currentRows = [];
+  let currentBytes = 0;
+  let startIndex = 0;
+
+  for (const row of rows) {
+    const rowData = {
+      values: Array.from(
+        { length: width },
+        (_, index) => literalCell(row[index]),
+      ),
+    };
+    const rowBytes = Buffer.byteLength(JSON.stringify(rowData), "utf8");
+    if (rowBytes > maxBytes) {
+      throw new Error(
+        "Uma linha excede o tamanho seguro do batchUpdate da staging",
+      );
+    }
+    if (
+      currentRows.length &&
+      (currentRows.length >= maxRows || currentBytes + rowBytes > maxBytes)
+    ) {
+      yield { startIndex, rows: currentRows };
+      startIndex += currentRows.length;
+      currentRows = [];
+      currentBytes = 0;
+    }
+    currentRows.push(rowData);
+    currentBytes += rowBytes;
+  }
+  if (currentRows.length) yield { startIndex, rows: currentRows };
 }
 
 class GoogleSheets {
@@ -860,6 +958,635 @@ class GoogleSheets {
       inserted: newRows.length,
       final: expectedBodyLength,
     };
+  }
+
+  async replaceRowsViaStaging({
+    sheetTitle,
+    columnRange,
+    header,
+    newRows,
+    shouldReplace,
+    matchColumnIndexes,
+  }) {
+    if (!Array.isArray(header) || !header.length) {
+      throw new Error("header obrigatorio");
+    }
+    if (!Array.isArray(newRows)) {
+      throw new Error("newRows precisa ser array");
+    }
+    if (typeof shouldReplace !== "function") {
+      throw new Error("shouldReplace obrigatorio");
+    }
+
+    const columnMatch = String(columnRange).match(/^([A-Z]+):([A-Z]+)$/i);
+    if (!columnMatch) {
+      throw new Error("columnRange precisa usar o formato A:Z");
+    }
+    const startColumnIndex = columnIndex(columnMatch[1]);
+    const endColumnIndex = columnIndex(columnMatch[2]);
+    if (startColumnIndex !== 0 || endColumnIndex < startColumnIndex) {
+      throw new Error("replaceRows exige columnRange iniciado em A");
+    }
+    const comparisonWidth = endColumnIndex - startColumnIndex + 1;
+    if (header.length > comparisonWidth) {
+      throw new Error("header excede columnRange");
+    }
+    const invalidRow = newRows.findIndex(
+      (row) => !Array.isArray(row) || row.length > comparisonWidth,
+    );
+    if (invalidRow !== -1) {
+      throw new Error(`newRows[${invalidRow}] excede columnRange`);
+    }
+    if (!Array.isArray(matchColumnIndexes) || !matchColumnIndexes.length) {
+      throw new Error("matchColumnIndexes obrigatorio para substituicao segura");
+    }
+    if (
+      matchColumnIndexes.some(
+        (index) =>
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= comparisonWidth,
+      )
+    ) {
+      throw new Error("matchColumnIndexes contem coluna invalida");
+    }
+
+    const readState = async (title, completeWidth) => {
+      const quotedTitle = quoteSheetTitle(title);
+      const completeEndColumn = columnLetter(completeWidth - 1);
+      const ranges = [
+        `${quotedTitle}!A1:${completeEndColumn}1`,
+        ...matchColumnIndexes.map(
+          (index) =>
+            `${quotedTitle}!${columnLetter(index)}:${columnLetter(index)}`,
+        ),
+      ];
+      const [selectorValues, completeValues] = await Promise.all([
+        this.getValuesBatch(ranges),
+        this.getValuesBatch(
+          [`${quotedTitle}!A:${completeEndColumn}`],
+          {
+            valueRenderOption: "FORMULA",
+            dateTimeRenderOption: "SERIAL_NUMBER",
+          },
+        ),
+      ]);
+      const [headerRows, ...selectorColumns] = selectorValues;
+      const first = headerRows[0] || [];
+      const normalized = (value) =>
+        String(value ?? "").trim().toLowerCase();
+      const headerMatches = header.filter(
+        (value, index) => normalized(first[index]) === normalized(value),
+      ).length;
+      const stateHasHeader =
+        headerMatches >= Math.min(3, header.length);
+      const columns = selectorColumns.map((column) =>
+        stateHasHeader ? column.slice(1) : column,
+      );
+      const completeRows = completeValues[0] || [];
+      const completeBodySource = stateHasHeader
+        ? completeRows.slice(1)
+        : completeRows;
+      const bodyLength = Math.max(
+        completeBodySource.length,
+        0,
+        ...columns.map((column) => column.length),
+      );
+      const body = Array.from({ length: bodyLength }, (_, rowIndex) => {
+        const row = [];
+        matchColumnIndexes.forEach((columnIndexValue, selectorIndex) => {
+          row[columnIndexValue] =
+            columns[selectorIndex][rowIndex]?.[0] ?? "";
+        });
+        return row;
+      });
+      const completeBody = Array.from(
+        { length: bodyLength },
+        (_, rowIndex) => completeBodySource[rowIndex] || [],
+      );
+      return { body, completeBody, first, hasHeader: stateHasHeader };
+    };
+
+    const readCompleteRows = async (title, width) => {
+      const quotedTitle = quoteSheetTitle(title);
+      const endColumn = columnLetter(width - 1);
+      const values = await this.getValuesBatch(
+        [`${quotedTitle}!A:${endColumn}`],
+        {
+          valueRenderOption: "FORMULA",
+          dateTimeRenderOption: "SERIAL_NUMBER",
+        },
+      );
+      return trimTrailingEmptyRows(values[0] || []);
+    };
+
+    const propertiesByTitle = await this.getSheetPropertiesByTitle({
+      forceRefresh: true,
+    });
+    const originalProperties = propertiesByTitle[sheetTitle];
+    if (!originalProperties) {
+      throw new Error(`Aba nao encontrada: ${sheetTitle}`);
+    }
+    const originalSheetId = originalProperties.sheetId;
+    const originalRowCount = Number(
+      originalProperties.gridProperties?.rowCount,
+    );
+    const originalColumnCount = Number(
+      originalProperties.gridProperties?.columnCount,
+    );
+    if (!Number.isInteger(originalRowCount) || originalRowCount < 1) {
+      throw new Error(`rowCount invalido para a aba: ${sheetTitle}`);
+    }
+    if (!Number.isInteger(originalColumnCount) || originalColumnCount < 1) {
+      throw new Error(`columnCount invalido para a aba: ${sheetTitle}`);
+    }
+    const targetColumnCount = Math.max(
+      originalColumnCount,
+      comparisonWidth,
+    );
+    let initialState = await readState(sheetTitle, targetColumnCount);
+    const initialSnapshot = stateSnapshot(
+      initialState,
+      matchColumnIndexes,
+      targetColumnCount,
+    );
+    const expectedHeader = Array.from(
+      { length: targetColumnCount },
+      (_, index) => {
+        if (index < comparisonWidth) return header[index] ?? "";
+        return initialState.hasHeader ? initialState.first[index] ?? "" : "";
+      },
+    );
+
+    const hasHeader = initialState.hasHeader;
+    const previousBodyLength = initialState.body.length;
+    const matched = initialState.body
+      .map((row, index) => (shouldReplace(row, index) ? index + 1 : null))
+      .filter((index) => index !== null);
+    const invalidReplacement = newRows.findIndex(
+      (row, index) => !shouldReplace(row, index),
+    );
+    if (invalidReplacement !== -1) {
+      throw new Error(
+        `newRows[${invalidReplacement}] nao pertence ao conjunto substituido`,
+      );
+    }
+
+    const matchedBodyIndexes = new Set(matched.map((index) => index - 1));
+    let remainingCompleteRows = trimTrailingEmptyRows(
+      initialState.completeBody.filter(
+        (_, index) => !matchedBodyIndexes.has(index),
+      ),
+    );
+    const remainingCompleteHash = preservedRowsHash(
+      remainingCompleteRows,
+      targetColumnCount,
+    );
+    const writeBodyStartIndex = remainingCompleteRows.length;
+    remainingCompleteRows = null;
+    initialState = null;
+    const writtenIndexes = Array.from(
+      { length: newRows.length },
+      (_, index) => writeBodyStartIndex + index,
+    );
+    const expectedBodyLength = writeBodyStartIndex + newRows.length;
+    const expectedGridRowCount = Math.max(1, expectedBodyLength + 1);
+    const formatBlocks = typedNumberFormatBlocks(
+      newRows,
+      writtenIndexes,
+      true,
+    );
+
+    const finalStateMatches = (state) => {
+      const headerMatches =
+        state.hasHeader &&
+        completeRowsHash([state.first], targetColumnCount) ===
+          completeRowsHash([expectedHeader], targetColumnCount);
+      if (
+        !headerMatches ||
+        state.body.length !== expectedBodyLength ||
+        state.completeBody.length !== expectedBodyLength
+      ) {
+        return false;
+      }
+      if (
+        preservedRowsHash(
+          state.completeBody.slice(0, writeBodyStartIndex),
+          targetColumnCount,
+        ) !== remainingCompleteHash
+      ) {
+        return false;
+      }
+      if (
+        completeRowsHash(
+          state.completeBody.slice(writeBodyStartIndex),
+          targetColumnCount,
+        ) !== completeRowsHash(newRows, targetColumnCount)
+      ) {
+        return false;
+      }
+      const targetIndexes = state.body
+        .map((row, index) => (shouldReplace(row, index) ? index : null))
+        .filter((index) => index !== null);
+      return (
+        targetIndexes.length === writtenIndexes.length &&
+        targetIndexes.every(
+          (value, index) => value === writtenIndexes[index],
+        )
+      );
+    };
+
+    const stagingSheetId = allocateStagingSheetId(propertiesByTitle);
+    const stagingTitle = `_data_staging_${stagingSheetId}`;
+    const stagingRowCount = Math.max(1, newRows.length);
+    const stagingColumnCount = comparisonWidth;
+    const stagingFormatBlocks = typedNumberFormatBlocks(
+      newRows,
+      newRows.map((_, index) => index),
+      false,
+    );
+
+    let totalCurrentCells = 0;
+    for (const properties of Object.values(propertiesByTitle)) {
+      if (!properties.gridProperties) continue;
+      const rowCount = Number(properties.gridProperties?.rowCount);
+      const columnCount = Number(properties.gridProperties?.columnCount);
+      if (
+        !Number.isInteger(rowCount) ||
+        rowCount < 1 ||
+        !Number.isInteger(columnCount) ||
+        columnCount < 1
+      ) {
+        throw new Error("Propriedades de grade invalidas na planilha");
+      }
+      totalCurrentCells += rowCount * columnCount;
+    }
+    const originalCells = originalRowCount * originalColumnCount;
+    const finalOriginalCells = expectedGridRowCount * targetColumnCount;
+    const peakOriginalCells = Math.max(
+      originalCells + (hasHeader ? 0 : originalColumnCount),
+      finalOriginalCells,
+    );
+    const projectedPeakCells =
+      totalCurrentCells -
+      originalCells +
+      peakOriginalCells +
+      stagingRowCount * stagingColumnCount;
+    if (projectedPeakCells > MAX_SPREADSHEET_CELLS) {
+      throw new Error(
+        `Staging excederia o limite de ${MAX_SPREADSHEET_CELLS} celulas da planilha`,
+      );
+    }
+
+    const gridProperties = { rowCount: expectedGridRowCount };
+    const propertyFields = ["gridProperties.rowCount"];
+    if (targetColumnCount !== originalColumnCount) {
+      gridProperties.columnCount = targetColumnCount;
+      propertyFields.push("gridProperties.columnCount");
+    }
+    const promotionRequests = [];
+    if (!hasHeader) {
+      promotionRequests.push({
+        insertDimension: {
+          range: {
+            sheetId: originalSheetId,
+            dimension: "ROWS",
+            startIndex: 0,
+            endIndex: 1,
+          },
+          inheritFromBefore: false,
+        },
+      });
+    }
+    for (const block of contiguousBlocks(matched).reverse()) {
+      promotionRequests.push({
+        deleteDimension: {
+          range: {
+            sheetId: originalSheetId,
+            dimension: "ROWS",
+            startIndex: block.start,
+            endIndex: block.end,
+          },
+        },
+      });
+    }
+    promotionRequests.push(
+      {
+        updateSheetProperties: {
+          properties: {
+            sheetId: originalSheetId,
+            gridProperties,
+          },
+          fields: propertyFields.join(","),
+        },
+      },
+      {
+        updateCells: {
+          range: {
+            sheetId: originalSheetId,
+            startRowIndex: 0,
+            endRowIndex: 1,
+            startColumnIndex: 0,
+            endColumnIndex: comparisonWidth,
+          },
+          rows: [
+            {
+              values: Array.from(
+                { length: comparisonWidth },
+                (_, index) => literalValueCell(header[index]),
+              ),
+            },
+          ],
+          fields: "userEnteredValue",
+        },
+      },
+    );
+    if (newRows.length) {
+      promotionRequests.push({
+        copyPaste: {
+          source: {
+            sheetId: stagingSheetId,
+            startRowIndex: 0,
+            endRowIndex: newRows.length,
+            startColumnIndex: 0,
+            endColumnIndex: comparisonWidth,
+          },
+          destination: {
+            sheetId: originalSheetId,
+            startRowIndex: writeBodyStartIndex + 1,
+            endRowIndex: writeBodyStartIndex + newRows.length + 1,
+            startColumnIndex: 0,
+            endColumnIndex: comparisonWidth,
+          },
+          pasteType: "PASTE_NORMAL",
+        },
+      });
+    }
+    const promotionMaxBytes = positiveInteger(
+      process.env.GOOGLE_SHEETS_PROMOTION_MAX_BYTES,
+      1_500_000,
+    );
+    if (
+      Buffer.byteLength(
+        JSON.stringify({ requests: promotionRequests }),
+        "utf8",
+      ) > promotionMaxBytes
+    ) {
+      throw new Error(
+        "Promocao atomica excederia o tamanho seguro de batchUpdate",
+      );
+    }
+
+    let stagingCreated = false;
+    let promotionState = "not-started";
+
+    const deleteStaging = async () => {
+      const before = await this.getSheetPropertiesByTitle({
+        forceRefresh: true,
+      });
+      if (before[stagingTitle]?.sheetId !== stagingSheetId) {
+        stagingCreated = false;
+        return;
+      }
+
+      let deleteError;
+      try {
+        await this.batchUpdate(
+          [{ deleteSheet: { sheetId: stagingSheetId } }],
+          { idempotent: false },
+        );
+      } catch (error) {
+        deleteError = error;
+      }
+      const after = await this.getSheetPropertiesByTitle({
+        forceRefresh: true,
+      });
+      if (after[stagingTitle]?.sheetId !== stagingSheetId) {
+        stagingCreated = false;
+        return;
+      }
+      if (deleteError) throw deleteError;
+      throw new Error("Falha ao remover aba staging");
+    };
+
+    try {
+      let setupError;
+      try {
+        await this.batchUpdate(
+          [
+            {
+              addSheet: {
+                properties: {
+                  sheetId: stagingSheetId,
+                  title: stagingTitle,
+                  hidden: true,
+                  gridProperties: {
+                    rowCount: stagingRowCount,
+                    columnCount: stagingColumnCount,
+                  },
+                },
+              },
+            },
+          ],
+          { idempotent: false },
+        );
+      } catch (error) {
+        setupError = error;
+      }
+      const stagingPropertiesByTitle =
+        await this.getSheetPropertiesByTitle({ forceRefresh: true });
+      const stagingProperties = stagingPropertiesByTitle[stagingTitle];
+      stagingCreated = stagingProperties?.sheetId === stagingSheetId;
+      if (!stagingCreated) {
+        if (setupError) throw setupError;
+        throw new Error("Aba staging nao foi criada");
+      }
+      if (
+        stagingProperties.gridProperties?.rowCount !== stagingRowCount ||
+        stagingProperties.gridProperties?.columnCount < stagingColumnCount
+      ) {
+        if (setupError) throw setupError;
+        throw new Error("Propriedades da staging invalidas");
+      }
+
+      const maxChunkRows = positiveInteger(
+        process.env.GOOGLE_SHEETS_STAGING_CHUNK_ROWS,
+        500,
+      );
+      const maxChunkBytes = positiveInteger(
+        process.env.GOOGLE_SHEETS_STAGING_CHUNK_BYTES,
+        1_500_000,
+      );
+      const chunkWriteGate = new RateGate(
+        nonNegativeInteger(
+          process.env.GOOGLE_SHEETS_STAGING_CHUNK_INTERVAL_MS,
+          1_250,
+        ),
+      );
+      const chunks = stagingRowChunks(newRows, stagingColumnCount, {
+        maxRows: maxChunkRows,
+        maxBytes: maxChunkBytes,
+      });
+      for (const chunk of chunks) {
+        await chunkWriteGate.wait();
+        const gridStart = chunk.startIndex;
+        await this.batchUpdate(
+          [
+            {
+              updateCells: {
+                range: {
+                  sheetId: stagingSheetId,
+                  startRowIndex: gridStart,
+                  endRowIndex: gridStart + chunk.rows.length,
+                  startColumnIndex: 0,
+                  endColumnIndex: stagingColumnCount,
+                },
+                rows: chunk.rows,
+                fields:
+                  "userEnteredValue,userEnteredFormat.numberFormat",
+              },
+            },
+          ],
+          { idempotent: true },
+        );
+      }
+
+      {
+        const stagingRows = await readCompleteRows(
+          stagingTitle,
+          stagingColumnCount,
+        );
+        if (
+          stagingRows.length !== newRows.length ||
+          completeRowsHash(stagingRows, stagingColumnCount) !==
+            completeRowsHash(newRows, stagingColumnCount)
+        ) {
+          throw new Error("Validacao de valores da staging falhou");
+        }
+      }
+      if (
+        !(await this.numberFormatsMatch(
+          stagingTitle,
+          stagingFormatBlocks,
+        ))
+      ) {
+        throw new Error("Validacao de formatos da staging falhou");
+      }
+
+      let prePromotionState = await readState(
+        sheetTitle,
+        targetColumnCount,
+      );
+      const prePromotionMatches = stateMatchesSnapshot(
+        prePromotionState,
+        initialSnapshot,
+        matchColumnIndexes,
+        targetColumnCount,
+      );
+      prePromotionState = null;
+      const prePromotionPropertiesByTitle =
+        await this.getSheetPropertiesByTitle({ forceRefresh: true });
+      const prePromotionProperties =
+        prePromotionPropertiesByTitle[sheetTitle];
+      if (
+        !prePromotionProperties ||
+        prePromotionProperties.sheetId !== originalSheetId ||
+        prePromotionProperties.gridProperties?.rowCount !==
+          originalRowCount ||
+        prePromotionProperties.gridProperties?.columnCount !==
+          originalColumnCount ||
+        !prePromotionMatches
+      ) {
+        throw new Error(
+          `Estado da planilha mudou antes da promocao: ${sheetTitle}`,
+        );
+      }
+
+      promotionState = "attempted";
+      let promotionError;
+      try {
+        await this.batchUpdate(promotionRequests, { idempotent: false });
+      } catch (error) {
+        promotionError = error;
+      }
+
+      const promotedState = await readState(
+        sheetTitle,
+        targetColumnCount,
+      );
+      const promotedPropertiesByTitle =
+        await this.getSheetPropertiesByTitle({ forceRefresh: true });
+      const promotedProperties = promotedPropertiesByTitle[sheetTitle];
+      const valuesWerePromoted =
+        promotedProperties?.sheetId === originalSheetId &&
+        promotedProperties.gridProperties?.rowCount ===
+          expectedGridRowCount &&
+        promotedProperties.gridProperties?.columnCount >= targetColumnCount &&
+        finalStateMatches(promotedState);
+      let formatsWerePromoted = false;
+      if (valuesWerePromoted) {
+        formatsWerePromoted = await this.numberFormatsMatch(
+          sheetTitle,
+          formatBlocks,
+        );
+      }
+      const originalIsUnchanged =
+        promotedProperties?.sheetId === originalSheetId &&
+        promotedProperties.gridProperties?.rowCount === originalRowCount &&
+        promotedProperties.gridProperties?.columnCount ===
+          originalColumnCount &&
+        stateMatchesSnapshot(
+          promotedState,
+          initialSnapshot,
+          matchColumnIndexes,
+          targetColumnCount,
+        );
+      if (
+        promotionError &&
+        valuesWerePromoted &&
+        formatsWerePromoted &&
+        originalIsUnchanged
+      ) {
+        promotionState = "unknown";
+        throw new Error(
+          `Resultado ambiguo da promocao: ${sheetTitle}`,
+          { cause: promotionError },
+        );
+      }
+      if (valuesWerePromoted && formatsWerePromoted) {
+        promotionState = "promoted";
+      } else {
+        if (promotionError && originalIsUnchanged) {
+          promotionState = "unchanged";
+          throw promotionError;
+        }
+        promotionState = "unknown";
+        if (promotionError) throw promotionError;
+        throw new Error(`Validacao apos promocao falhou: ${sheetTitle}`);
+      }
+
+      await deleteStaging();
+      return {
+        previous: previousBodyLength,
+        removed: matched.length,
+        inserted: newRows.length,
+        final: expectedBodyLength,
+      };
+    } catch (error) {
+      if (
+        stagingCreated &&
+        (promotionState === "not-started" ||
+          promotionState === "unchanged")
+      ) {
+        try {
+          await deleteStaging();
+        } catch {
+          // The original error is more useful. The staging sheet is hidden and
+          // deliberately retained if cleanup cannot be confirmed.
+        }
+      }
+      throw error;
+    }
   }
 }
 

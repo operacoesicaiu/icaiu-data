@@ -2,13 +2,88 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  assertNonEmptyWindowReplacement,
   cleanupGlobalDocumentDuplicates,
   dedupeDocumentRowsKeepLast,
   digitsToNumber,
   documentDeleteRequests,
   duplicateDocumentIndexes,
+  formatarDataBR,
+  formatarMesBR,
+  resolveSigeWindow,
   validateFaturamentoHeader,
 } = require('../src/sige/sheets/sync');
+
+const NOW = new Date('2026-07-15T15:00:00Z');
+
+test('SIGE formata dia e mes no calendario de Sao Paulo', () => {
+  assert.equal(formatarDataBR('2026-08-01T01:30:00Z'), '31/07/2026');
+  assert.equal(formatarMesBR('2026-08-01T01:30:00Z'), '07/2026');
+  assert.equal(formatarDataBR('2026-08-01T01:30:00'), '01/08/2026');
+  assert.equal(formatarMesBR('2026-08-01'), '08/2026');
+});
+
+test('SIGE usa cinco dias concluidos por padrao e aceita janela explicita prioritaria', () => {
+  const standard = resolveSigeWindow({}, NOW);
+  assert.equal(standard.explicit, false);
+  assert.equal(standard.days, 5);
+  assert.equal(standard.startDate.toISOString().slice(0, 10), '2026-07-10');
+  assert.equal(standard.endDate.toISOString().slice(0, 10), '2026-07-14');
+
+  const explicit = resolveSigeWindow({
+    SIGE_SHEETS_DAYS: '1',
+    SIGE_SHEETS_START_DATE: '2026-07-01',
+    SIGE_SHEETS_END_DATE: '2026-07-14',
+  }, NOW);
+  assert.equal(explicit.explicit, true);
+  assert.equal(explicit.days, 14);
+  assert.equal(explicit.startDate.toISOString().slice(0, 10), '2026-07-01');
+  assert.equal(explicit.endDate.toISOString().slice(0, 10), '2026-07-14');
+});
+
+test('SIGE rejeita janela incompleta, invertida ou que alcance hoje', () => {
+  assert.throws(
+    () => resolveSigeWindow({ SIGE_SHEETS_START_DATE: '2026-07-01' }, NOW),
+    /devem ser informadas juntas/,
+  );
+  assert.throws(
+    () => resolveSigeWindow({
+      SIGE_SHEETS_START_DATE: '2026-07-14',
+      SIGE_SHEETS_END_DATE: '2026-07-01',
+    }, NOW),
+    /invertida/,
+  );
+  assert.throws(
+    () => resolveSigeWindow({
+      SIGE_SHEETS_START_DATE: '2026-07-01',
+      SIGE_SHEETS_END_DATE: '2026-07-15',
+    }, NOW),
+    /anterior a hoje/,
+  );
+});
+
+test('SIGE protege janela existente contra resposta vazia salvo override explicito', () => {
+  const options = {
+    incomingCount: 0,
+    existingValues: [['01/07/2026'], ['30/06/2026']],
+    startDate: new Date('2026-07-01T00:00:00Z'),
+    endDate: new Date('2026-07-14T00:00:00Z'),
+    allowEmpty: false,
+  };
+  assert.throws(
+    () => assertNonEmptyWindowReplacement(options),
+    /substituicao cancelada/,
+  );
+  assert.doesNotThrow(() =>
+    assertNonEmptyWindowReplacement({ ...options, allowEmpty: true }),
+  );
+  assert.doesNotThrow(() =>
+    assertNonEmptyWindowReplacement({
+      ...options,
+      existingValues: [['30/06/2026']],
+    }),
+  );
+});
 
 test('identificadores numericos SIGE preservam o tipo historico sem apostrofo', () => {
   assert.equal(digitsToNumber('01234567890'), 1234567890);
