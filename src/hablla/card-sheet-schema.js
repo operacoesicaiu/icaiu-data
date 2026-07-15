@@ -3,7 +3,7 @@ const GoogleSheets = require("../google/sheets");
 const MAX_CELL_CHARACTERS = 50_000;
 const MAX_COLUMNS = 18_278;
 
-const CARD_HEADERS = Object.freeze([
+const TECHNICAL_CARD_HEADERS = Object.freeze([
   "updated_at",
   "created_at",
   "workspace",
@@ -24,6 +24,76 @@ const CARD_HEADERS = Object.freeze([
   "Tags",
   "Telefone",
 ]);
+
+const CARD_HEADERS = Object.freeze([
+  "Atualizado",
+  "Criado",
+  "workspace",
+  "Quadro",
+  "Lista",
+  "Device",
+  "Aparelho",
+  "Serviço",
+  "Nome",
+  "Descrição",
+  "Origem do Card",
+  "Status",
+  "Usuário",
+  "Finalizado",
+  "ID",
+  "Atendente",
+  "Motivo de Contato",
+  "Tags",
+  "Telefone",
+]);
+
+const CUSTOM_FIELD_DISPLAY_NAMES = Object.freeze({
+  "67ca3b1b2a2005b0e7c0b67f": "utm_medium",
+  "67ca3ad19698c9a231679c09": "utm_source",
+  "67ca3d7709af47405f94b336": "Página de Conversão",
+  "6a341e0a9794a6f45768e4c8": "Cidade",
+  "6a34243f43dae636168814f5": "Browser",
+  "6a34240d54956e3f17031590": "CEP_Conversao",
+  "6a342421be3df912c7e28014": "Device Mobile",
+  "6a342458ddddb2628027186c": "Data/Hora de Entrada no Site",
+  "6a34244898b6bf2dfd2796b2": "Dimensões da Tela",
+  "6a342434c2e6bd1fdedab9ca": "Sistema Operacional do Device",
+  "6a3424608582742305e4af34": "Origin",
+  "6a341b60fbf9c9ef3b3bff65": "ID da Conversão no Site",
+  "67ca3b3bfa1aacf9258e4dbb": "utm_campaign",
+  "67ca3cc6abf8dede928b7f07": "utm_content",
+  "67ca3c4d75a80329df8eeff5": "utm_term",
+  "6a1494ab3dae0a68cd239a93": "Cidade - Preferência",
+  "6a14950aa329fb75151f7dae": "Unidade - Preferência",
+  "67dc6a0a17925c23d8365708": "Serviço (campo personalizado)",
+  "67b5fd0a6ee6fcbb66ae93c2": "Loja de agendamento",
+  "67b5fc4b9d6e187ed4fa31fa": "Motivo do não agendamento?",
+  "67b5fd5e5f04cc2397fc2fd3": "Observação do não agendamento",
+  "67b5fbad827b187ab70ab641": "Agendamento realizado?",
+});
+
+const BASE_HEADER_ALIASES = new Map();
+for (let index = 0; index < CARD_HEADERS.length; index += 1) {
+  const logical = TECHNICAL_CARD_HEADERS[index];
+  for (const alias of new Set([logical, CARD_HEADERS[index]])) {
+    const existing = BASE_HEADER_ALIASES.get(alias);
+    if (existing && existing !== logical) {
+      throw new Error(`Alias base Hablla Card ambiguo: ${alias}`);
+    }
+    BASE_HEADER_ALIASES.set(alias, logical);
+  }
+}
+
+const CUSTOM_FIELD_LOGICAL_TO_DISPLAY = new Map();
+const CUSTOM_FIELD_DISPLAY_TO_LOGICAL = new Map();
+for (const [id, display] of Object.entries(CUSTOM_FIELD_DISPLAY_NAMES)) {
+  const logical = `custom_field.${id}`;
+  if (BASE_HEADER_ALIASES.has(display) || CUSTOM_FIELD_DISPLAY_TO_LOGICAL.has(display)) {
+    throw new Error(`Nome visual Hablla Card ambiguo: ${display}`);
+  }
+  CUSTOM_FIELD_LOGICAL_TO_DISPLAY.set(logical, display);
+  CUSTOM_FIELD_DISPLAY_TO_LOGICAL.set(display, logical);
+}
 
 const CARD_CUSTOM_FIELD_IDS = Object.freeze([
   "67b39131ee792966f3fba492",
@@ -159,11 +229,15 @@ function canonicalJson(value, label = "Valor do card") {
 }
 
 function logicalKeyForHeader(header) {
-  if (header.startsWith("card.")) return header.slice("card.".length);
-  if (header.startsWith("custom_field.")) {
-    return header.slice("custom_field.".length);
+  const logical =
+    BASE_HEADER_ALIASES.get(header) ||
+    CUSTOM_FIELD_DISPLAY_TO_LOGICAL.get(header) ||
+    header;
+  if (logical.startsWith("card.")) return logical.slice("card.".length);
+  if (logical.startsWith("custom_field.")) {
+    return logical.slice("custom_field.".length);
   }
-  return header;
+  return logical;
 }
 
 function stripLeadingApostrophes(value) {
@@ -195,13 +269,21 @@ function sheetValue(value, header) {
   throw new Error(`Tipo nao suportado em ${header}: ${typeof value}`);
 }
 
-function isRecognizedExtraHeader(header) {
+function logicalExtraHeader(header) {
+  const mappedCustomField = CUSTOM_FIELD_DISPLAY_TO_LOGICAL.get(header);
+  if (mappedCustomField) return mappedCustomField;
   if (header.startsWith("custom_field.")) {
-    return header.length > "custom_field.".length;
+    return header.length > "custom_field.".length ? header : null;
   }
-  if (!header.startsWith("card.")) return false;
+  if (!header.startsWith("card.")) return null;
   const key = header.slice("card.".length);
-  return Boolean(key) && !FULLY_REPRESENTED_TOP_LEVEL_KEYS.has(key);
+  return Boolean(key) && !FULLY_REPRESENTED_TOP_LEVEL_KEYS.has(key)
+    ? header
+    : null;
+}
+
+function displayHeaderForLogical(logical) {
+  return CUSTOM_FIELD_LOGICAL_TO_DISPLAY.get(logical) || logical;
 }
 
 function validateCardSheetHeader(header) {
@@ -214,6 +296,9 @@ function validateCardSheetHeader(header) {
   }
 
   const seen = new Set();
+  const seenLogical = new Set();
+  const seenDisplay = new Set();
+  const normalized = [];
   for (let index = 0; index < header.length; index += 1) {
     const value = header[index];
     if (typeof value !== "string" || !value) {
@@ -223,15 +308,33 @@ function validateCardSheetHeader(header) {
     if (seen.has(value)) throw new Error(`Cabecalho Hablla Card duplicado: ${value}`);
     seen.add(value);
 
+    let logical;
+    let display;
     if (index < CARD_HEADERS.length) {
-      if (value !== CARD_HEADERS[index]) {
+      logical = TECHNICAL_CARD_HEADERS[index];
+      if (value !== logical && value !== CARD_HEADERS[index]) {
         throw new Error(`Coluna base Hablla Card alterada na posicao ${index + 1}`);
       }
-    } else if (!isRecognizedExtraHeader(value)) {
-      throw new Error(`Cabecalho extra Hablla Card nao reconhecido: ${value}`);
+      display = CARD_HEADERS[index];
+    } else {
+      logical = logicalExtraHeader(value);
+      if (!logical) {
+        throw new Error(`Cabecalho extra Hablla Card nao reconhecido: ${value}`);
+      }
+      display = displayHeaderForLogical(logical);
     }
+
+    if (seenLogical.has(logical)) {
+      throw new Error(`Cabecalho Hablla Card duplicado: ${value}`);
+    }
+    if (seenDisplay.has(display)) {
+      throw new Error(`Cabecalho Hablla Card visual duplicado: ${display}`);
+    }
+    seenLogical.add(logical);
+    seenDisplay.add(display);
+    normalized.push(display);
   }
-  return header.slice();
+  return normalized;
 }
 
 function assertCards(cards) {
@@ -258,29 +361,37 @@ function customFieldId(field) {
 function discoverCardSheetHeaders(cards, existingHeader = CARD_HEADERS) {
   assertCards(cards);
   const header = validateCardSheetHeader(existingHeader);
-  const known = new Set(header);
+  const known = new Set(
+    header.map((value, index) =>
+      index < CARD_HEADERS.length
+        ? TECHNICAL_CARD_HEADERS[index]
+        : logicalExtraHeader(value),
+    ),
+  );
   const discovered = new Set();
 
   for (const card of cards) {
     for (const key of Object.keys(card)) {
       if (FULLY_REPRESENTED_TOP_LEVEL_KEYS.has(key)) continue;
-      const candidate = `card.${key}`;
-      assertCellSize(candidate, "Cabecalho dinamico Hablla Card");
-      if (!known.has(candidate)) discovered.add(candidate);
+      const logical = `card.${key}`;
+      assertCellSize(logical, "Cabecalho dinamico Hablla Card");
+      if (!known.has(logical)) discovered.add(logical);
     }
 
     if (Array.isArray(card.custom_fields)) {
       for (const field of card.custom_fields) {
         const id = customFieldId(field);
         if (id === null) continue;
-        const candidate = `custom_field.${id}`;
-        assertCellSize(candidate, "Cabecalho dinamico Hablla Card");
-        if (!known.has(candidate)) discovered.add(candidate);
+        const logical = `custom_field.${id}`;
+        assertCellSize(logical, "Cabecalho dinamico Hablla Card");
+        if (!known.has(logical)) discovered.add(logical);
       }
     }
   }
 
-  const additions = [...discovered].sort(compareText);
+  const additions = [...discovered]
+    .sort(compareText)
+    .map(displayHeaderForLogical);
   if (header.length + additions.length > MAX_COLUMNS) {
     throw new Error(`Cabecalho Hablla Card excede ${MAX_COLUMNS} colunas`);
   }
@@ -353,14 +464,17 @@ function duplicateCustomFieldValue(values, header) {
 }
 
 function dynamicCardValue(card, header) {
-  if (header.startsWith("card.")) {
-    const key = header.slice("card.".length);
+  const logical = logicalExtraHeader(header);
+  if (!logical) throw new Error(`Cabecalho dinamico Hablla Card invalido: ${header}`);
+
+  if (logical.startsWith("card.")) {
+    const key = logical.slice("card.".length);
     return Object.prototype.hasOwnProperty.call(card, key)
-      ? sheetValue(card[key], header)
+      ? sheetValue(card[key], logical)
       : "";
   }
 
-  const id = header.slice("custom_field.".length);
+  const id = logical.slice("custom_field.".length);
   const values = [];
   if (Array.isArray(card.custom_fields)) {
     for (const field of card.custom_fields) {
@@ -374,8 +488,8 @@ function dynamicCardValue(card, header) {
     }
   }
   if (!values.length) return "";
-  if (values.length === 1) return sheetValue(values[0], header);
-  return duplicateCustomFieldValue(values, header);
+  if (values.length === 1) return sheetValue(values[0], logical);
+  return duplicateCustomFieldValue(values, logical);
 }
 
 function buildCardSheetRow(card, header, options = {}) {
@@ -402,7 +516,9 @@ function buildCardSheet(cards, existingHeader = CARD_HEADERS, options = {}) {
 module.exports = {
   CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
+  CUSTOM_FIELD_DISPLAY_NAMES,
   MAX_CELL_CHARACTERS,
+  TECHNICAL_CARD_HEADERS,
   buildBaseCardRow,
   buildCardSheet,
   buildCardSheetRow,

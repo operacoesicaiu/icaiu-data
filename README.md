@@ -163,7 +163,34 @@ Proteções importantes:
 - escritas ambíguas não são repetidas cegamente: primeiro o estado final é lido e validado;
 - Apps Script ou outro escritor legítimo pode alterar a planilha depois de uma execução bem-sucedida; por isso uma comparação posterior deve considerar o horário de cada gravação.
 
-Strings são gravadas como texto literal, sem apóstrofo visível e sem permitir execução de fórmulas. Campos que historicamente eram datas, horas, booleanos ou números continuam com esses tipos no Sheets. A `Base Hablla Card` mantém exatamente as 19 colunas históricas de A:S e acrescenta, somente depois delas, `card.<campo>` para propriedades ainda não representadas e `custom_field.<id>` para cada campo personalizado descoberto. Colunas já criadas nunca mudam de posição nem desaparecem. A `Base Cliente` conserva o contrato de 17 colunas; descrições pertencem a `Outros Campos`. No SIGE, a janela é substituída e a deduplicação global pela coluna J remove somente ocorrências anteriores, preservando fisicamente a última linha.
+Strings são gravadas como texto literal, sem apóstrofo visível e sem permitir execução de fórmulas. Campos que historicamente eram datas, horas, booleanos ou números continuam com esses tipos no Sheets. A `Base Hablla Card` mantém exatamente as 19 colunas históricas de A:S, agora com os rótulos visuais `Atualizado`, `Criado`, `workspace`, `Quadro`, `Lista`, `Device`, `Aparelho`, `Serviço`, `Nome`, `Descrição`, `Origem do Card`, `Status`, `Usuário`, `Finalizado`, `ID`, `Atendente`, `Motivo de Contato`, `Tags` e `Telefone`. O código aceita o cabeçalho técnico anterior durante a migração, mas associa cada rótulo à mesma chave lógica da API, sem deslocar dados. Depois de S, propriedades ainda não representadas usam `card.<campo>` e cada campo personalizado descoberto ganha uma coluna; colunas existentes nunca mudam de posição nem desaparecem. Quando a API devolve o mesmo ID personalizado mais de uma vez no card, todos os valores são preservados em JSON estável. A `Base Cliente` conserva o contrato de 17 colunas; descrições pertencem a `Outros Campos`. No SIGE, a janela é substituída e a deduplicação global pela coluna J remove somente ocorrências anteriores, preservando fisicamente a última linha.
+
+Os campos personalizados conhecidos recebem nomes legíveis; qualquer ID não listado continua como `custom_field.<id>`:
+
+| ID lógico | Cabeçalho visual |
+|---|---|
+| `67ca3b1b2a2005b0e7c0b67f` | `utm_medium` |
+| `67ca3ad19698c9a231679c09` | `utm_source` |
+| `67ca3d7709af47405f94b336` | `Página de Conversão` |
+| `6a341e0a9794a6f45768e4c8` | `Cidade` |
+| `6a34243f43dae636168814f5` | `Browser` |
+| `6a34240d54956e3f17031590` | `CEP_Conversao` |
+| `6a342421be3df912c7e28014` | `Device Mobile` |
+| `6a342458ddddb2628027186c` | `Data/Hora de Entrada no Site` |
+| `6a34244898b6bf2dfd2796b2` | `Dimensões da Tela` |
+| `6a342434c2e6bd1fdedab9ca` | `Sistema Operacional do Device` |
+| `6a3424608582742305e4af34` | `Origin` |
+| `6a341b60fbf9c9ef3b3bff65` | `ID da Conversão no Site` |
+| `67ca3b3bfa1aacf9258e4dbb` | `utm_campaign` |
+| `67ca3cc6abf8dede928b7f07` | `utm_content` |
+| `67ca3c4d75a80329df8eeff5` | `utm_term` |
+| `6a1494ab3dae0a68cd239a93` | `Cidade - Preferência` |
+| `6a14950aa329fb75151f7dae` | `Unidade - Preferência` |
+| `67dc6a0a17925c23d8365708` | `Serviço (campo personalizado)` |
+| `67b5fd0a6ee6fcbb66ae93c2` | `Loja de agendamento` |
+| `67b5fc4b9d6e187ed4fa31fa` | `Motivo do não agendamento?` |
+| `67b5fd5e5f04cc2397fc2fd3` | `Observação do não agendamento` |
+| `67b5fbad827b187ab70ab641` | `Agendamento realizado?` |
 
 ## Paginação eficiente do Hablla
 

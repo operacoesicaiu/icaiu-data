@@ -5,7 +5,9 @@ const GoogleSheets = require("../src/google/sheets");
 const {
   CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
+  CUSTOM_FIELD_DISPLAY_NAMES,
   MAX_CELL_CHARACTERS,
+  TECHNICAL_CARD_HEADERS,
   buildBaseCardRow,
   buildCardSheet,
   buildCardSheetRow,
@@ -49,28 +51,36 @@ function cardFixture(overrides = {}) {
   };
 }
 
-test("as 19 colunas base sao imutaveis e a linha reproduz o contrato atual", () => {
+test("as 19 colunas base usam nomes visuais e a linha reproduz o contrato atual", () => {
   assert.equal(Object.isFrozen(CARD_HEADERS), true);
   assert.deepEqual(CARD_HEADERS, [
+    "Atualizado",
+    "Criado",
+    "workspace",
+    "Quadro",
+    "Lista",
+    "Device",
+    "Aparelho",
+    "Serviço",
+    "Nome",
+    "Descrição",
+    "Origem do Card",
+    "Status",
+    "Usuário",
+    "Finalizado",
+    "ID",
+    "Atendente",
+    "Motivo de Contato",
+    "Tags",
+    "Telefone",
+  ]);
+  assert.equal(Object.isFrozen(TECHNICAL_CARD_HEADERS), true);
+  assert.deepEqual(TECHNICAL_CARD_HEADERS.slice(0, 5), [
     "updated_at",
     "created_at",
     "workspace",
     "board",
     "list",
-    "custom_field_1",
-    "custom_field_2",
-    "custom_field_3",
-    "name",
-    "description",
-    "source",
-    "status",
-    "user",
-    "finished_at",
-    "id",
-    "Atendente",
-    "Motivo de Contato",
-    "Tags",
-    "Telefone",
   ]);
   assert.throws(() => CARD_HEADERS.push("outra"), TypeError);
 
@@ -97,6 +107,37 @@ test("as 19 colunas base sao imutaveis e a linha reproduz o contrato atual", () 
     "tag-a, tag-b",
     "telefone-teste",
   ]);
+});
+
+test("cabecalho tecnico e migrado para o visual sem mudar posicoes", () => {
+  const knownId = "67ca3b1b2a2005b0e7c0b67f";
+  const oldHeader = [
+    ...TECHNICAL_CARD_HEADERS,
+    "card.metadata",
+    `custom_field.${knownId}`,
+    "custom_field.desconhecido",
+  ];
+
+  assert.deepEqual(validateCardSheetHeader(oldHeader), [
+    ...CARD_HEADERS,
+    "card.metadata",
+    "utm_medium",
+    "custom_field.desconhecido",
+  ]);
+  assert.deepEqual(
+    validateCardSheetHeader([
+      ...CARD_HEADERS,
+      "card.metadata",
+      "utm_medium",
+      "custom_field.desconhecido",
+    ]),
+    [
+      ...CARD_HEADERS,
+      "card.metadata",
+      "utm_medium",
+      "custom_field.desconhecido",
+    ],
+  );
 });
 
 test("descobertas sao ordenadas e preservam para sempre a ordem existente", () => {
@@ -143,6 +184,35 @@ test("descobertas sao ordenadas e preservam para sempre a ordem existente", () =
     "custom_field.field-new",
   ]);
   assert.deepEqual(discoverCardSheetHeaders([], nextHeader), nextHeader);
+});
+
+test("IDs conhecidos recebem nomes visuais e desconhecidos permanecem tecnicos", () => {
+  assert.equal(Object.keys(CUSTOM_FIELD_DISPLAY_NAMES).length, 22);
+  const knownFields = Object.entries(CUSTOM_FIELD_DISPLAY_NAMES).map(
+    ([custom_field, display], index) => ({
+      custom_field,
+      value: `valor-${index}`,
+      display,
+    }),
+  );
+  const card = cardFixture({
+    custom_fields: [
+      ...knownFields,
+      { custom_field: "id-sem-mapeamento", value: "desconhecido" },
+    ],
+  });
+  const { header, rows } = buildCardSheet([card], TECHNICAL_CARD_HEADERS, {
+    customFieldIds: FIXED_FIELD_IDS,
+  });
+
+  for (const { custom_field, value, display } of knownFields) {
+    assert.equal(header.includes(`custom_field.${custom_field}`), false);
+    assert.equal(rows[0][header.indexOf(display)], value);
+  }
+  assert.equal(
+    rows[0][header.indexOf("custom_field.id-sem-mapeamento")],
+    "desconhecido",
+  );
 });
 
 test("toda linha acompanha a largura descoberta e campos ausentes ficam vazios", () => {
@@ -275,5 +345,14 @@ test("cabecalho alterado, extra desconhecido ou duplicado e rejeitado", () => {
   assert.throws(
     () => validateCardSheetHeader([...CARD_HEADERS, "custom_field."]),
     /nao reconhecido/,
+  );
+  assert.throws(
+    () =>
+      validateCardSheetHeader([
+        ...CARD_HEADERS,
+        "custom_field.67ca3b1b2a2005b0e7c0b67f",
+        "utm_medium",
+      ]),
+    /duplicado/,
   );
 });
