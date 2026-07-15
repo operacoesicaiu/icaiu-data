@@ -6,6 +6,7 @@ const collectHabllaCards = require("../card-collector");
 const {
   CARD_HEADERS,
   buildCardSheet,
+  normalizePhoneValue,
 } = require("../card-sheet-schema");
 const {
   extractAttendants,
@@ -380,7 +381,7 @@ function clientRow(person) {
   return [
     person.id,
     person.name || "",
-    primaryPhone?.phone || "",
+    normalizePhoneValue(primaryPhone?.phone || ""),
     primaryPhone?.is_whatsapp ? "Sim" : "",
     emails,
     GoogleSheets.dateTimeCell(formatBrazilianDateTime(person.created_at), {
@@ -395,7 +396,7 @@ function clientRow(person) {
     customFields[CLIENT_CUSTOM_FIELD_IDS[1]] || "",
     customFields[CLIENT_CUSTOM_FIELD_IDS[2]] || "",
     customFields[CLIENT_CUSTOM_FIELD_IDS[3]] || "",
-    customFields[CLIENT_CUSTOM_FIELD_IDS[4]] || "",
+    normalizePhoneValue(customFields[CLIENT_CUSTOM_FIELD_IDS[4]] || ""),
     customFields[CLIENT_CUSTOM_FIELD_IDS[5]] || "",
     otherFields.join("; "),
     users,

@@ -166,14 +166,25 @@ function logicalKeyForHeader(header) {
   return header;
 }
 
+function stripLeadingApostrophes(value) {
+  return typeof value === "string" ? value.replace(/^'+/, "") : value;
+}
+
+function normalizePhoneValue(value) {
+  const literal = stripLeadingApostrophes(value);
+  return typeof literal === "string" ? literal.replace(/^\++/, "") : literal;
+}
+
 function sheetValue(value, header) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "string") {
-    assertCellSize(value, `Valor de ${header}`);
-    if (logicalKeyForHeader(header).endsWith("_at") && isValidIsoDateTime(value)) {
-      return GoogleSheets.dateTimeCell(formatBrazilianDateTime(value));
+    const literal = stripLeadingApostrophes(value);
+    if (!literal) return "";
+    assertCellSize(literal, `Valor de ${header}`);
+    if (logicalKeyForHeader(header).endsWith("_at") && isValidIsoDateTime(literal)) {
+      return GoogleSheets.dateTimeCell(formatBrazilianDateTime(literal));
     }
-    return GoogleSheets.textCell(value);
+    return GoogleSheets.textCell(literal);
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error(`Valor numerico invalido em ${header}`);
@@ -320,7 +331,7 @@ function buildBaseCardRow(card, { customFieldIds = CARD_CUSTOM_FIELD_IDS } = {})
     userName,
     fields[3],
     (card.tags || []).map((tag) => tag.name).join(", "),
-    fields[4],
+    normalizePhoneValue(fields[4]),
   ];
 }
 
@@ -353,7 +364,13 @@ function dynamicCardValue(card, header) {
   const values = [];
   if (Array.isArray(card.custom_fields)) {
     for (const field of card.custom_fields) {
-      if (customFieldId(field) === id) values.push(field.value);
+      if (customFieldId(field) === id) {
+        values.push(
+          id === CARD_CUSTOM_FIELD_IDS[4]
+            ? normalizePhoneValue(field.value)
+            : field.value,
+        );
+      }
     }
   }
   if (!values.length) return "";
@@ -391,6 +408,8 @@ module.exports = {
   buildCardSheetRow,
   canonicalJson,
   discoverCardSheetHeaders,
+  normalizePhoneValue,
   sheetValue,
+  stripLeadingApostrophes,
   validateCardSheetHeader,
 };

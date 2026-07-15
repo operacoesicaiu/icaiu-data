@@ -3,12 +3,14 @@ const test = require("node:test");
 
 const GoogleSheets = require("../src/google/sheets");
 const {
+  CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
   MAX_CELL_CHARACTERS,
   buildBaseCardRow,
   buildCardSheet,
   buildCardSheetRow,
   discoverCardSheetHeaders,
+  normalizePhoneValue,
   sheetValue,
   validateCardSheetHeader,
 } = require("../src/hablla/card-sheet-schema");
@@ -192,6 +194,23 @@ test("valores dinamicos preservam literais, numeros, booleanos, JSON e datas", (
     GoogleSheets.literalCell(at("card.observed_at")).userEnteredValue.numberValue > 0,
     true,
   );
+});
+
+test("remove apostrofo de escape e mais inicial apenas de telefone", () => {
+  assert.equal(sheetValue("'texto", "card.name"), "texto");
+  assert.equal(sheetValue("+campanha", "card.name"), "+campanha");
+  assert.equal(normalizePhoneValue("'+5511999999999"), "5511999999999");
+
+  const phoneId = CARD_CUSTOM_FIELD_IDS[4];
+  const card = cardFixture({
+    name: "'Card sem escape",
+    custom_fields: [{ custom_field: phoneId, value: "+5511999999999" }],
+  });
+  const header = discoverCardSheetHeaders([card]);
+  const row = buildCardSheetRow(card, header);
+  assert.equal(row[8], "Card sem escape");
+  assert.equal(row[18], "5511999999999");
+  assert.equal(row[header.indexOf(`custom_field.${phoneId}`)], "5511999999999");
 });
 
 test("cada custom field ganha coluna e IDs repetidos viram JSON estavel sem perda", () => {
