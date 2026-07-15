@@ -57,4 +57,24 @@ async function listSigeOrdersForDay(date) {
   }
 }
 
-module.exports = { listSigeOrdersForDay };
+async function getSigePersonByCpfCnpj(value) {
+  const cpfCnpj = String(value || "").replace(/\D/g, "");
+  if (!cpfCnpj) return null;
+
+  await requestGate.wait();
+  const response = await withHttpRetry(
+    () =>
+      axios.get("https://api.sigecloud.com.br/request/Pessoas/Pesquisar", {
+        headers: getSigeHeaders(),
+        timeout: 60000,
+        params: { cpfcnpj: cpfCnpj },
+      }),
+    { maxAttempts: 5, baseMs: 1500 },
+  );
+  if (Number(response?.status) !== 200 || !Array.isArray(response.data)) {
+    throw new Error("SIGE retornou lista de pessoas invalida");
+  }
+  return response.data[0] || null;
+}
+
+module.exports = { getSigePersonByCpfCnpj, listSigeOrdersForDay };

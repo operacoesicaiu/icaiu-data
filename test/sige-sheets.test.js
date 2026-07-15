@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   assertNonEmptyWindowReplacement,
   cleanupGlobalDocumentDuplicates,
+  contactByCpfFromRows,
   dedupeDocumentRowsKeepLast,
   digitsToNumber,
   documentDeleteRequests,
@@ -92,6 +93,16 @@ test('identificadores numericos SIGE preservam o tipo historico sem apostrofo', 
     () => digitsToNumber('9999999999999999'),
     /precisao segura/,
   );
+});
+
+test('reutiliza contato historico por CPF e normaliza somente o prefixo tecnico', () => {
+  const contacts = contactByCpfFromRows([
+    ["'+5511999999999", '', '', '', '', '', '', '', '', '', '123.456.789-00'],
+    ['+5521999999999', '', '', '', '', '', '', '', '', '', '12345678900'],
+    ['ignorado', '', '', '', '', '', '', '', '', '', ''],
+  ]);
+  assert.equal(contacts.get('12345678900'), '5511999999999');
+  assert.equal(contacts.size, 1);
 });
 
 const header = [

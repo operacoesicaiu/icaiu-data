@@ -6,7 +6,7 @@ const {
   isoDay,
   today: saoPauloToday,
 } = require("../../lib/sao-paulo-date");
-const { listSigeOrdersForDay } = require("../api");
+const { getSigePersonByCpfCnpj, listSigeOrdersForDay } = require("../api");
 
 // ================================
 // UTILITÁRIOS
@@ -176,6 +176,22 @@ function digitsToNumber(value) {
     throw new Error("Identificador numerico SIGE excede a precisao segura");
   }
   return number;
+}
+
+function normalizeContact(value) {
+  return typeof value === "string"
+    ? value.replace(/^['+]+/, "").trim()
+    : "";
+}
+
+function contactByCpfFromRows(rows) {
+  const contacts = new Map();
+  for (const row of rows || []) {
+    const cpf = String(row?.[10] || "").replace(/\D/g, "");
+    const contact = normalizeContact(row?.[0]);
+    if (cpf && contact && !contacts.has(cpf)) contacts.set(cpf, contact);
+  }
+  return contacts;
 }
 
 const DOCUMENT_COLUMN_INDEX = 9;
@@ -389,6 +405,9 @@ async function run() {
     });
     const currentHeader = (await sheets.getValues("Faturamento!A1:R1"))[0];
     validateFaturamentoHeader(currentHeader);
+    const existingFaturamentoRows = await sheets.getValues("Faturamento!A2:K");
+    const contactByCpf = contactByCpfFromRows(existingFaturamentoRows);
+    const personByCpf = new Map();
 
     // ================================
     // RANGE DE DATAS
@@ -459,6 +478,15 @@ async function run() {
         const clienteCpf = p.ClienteCNPJ || "";
 
         const clienteCpfLimpo = clienteCpf.replace(/\D/g, "");
+        let contato = contactByCpf.get(clienteCpfLimpo) || "";
+        if (!contato && clienteCpfLimpo) {
+          if (!personByCpf.has(clienteCpfLimpo)) {
+            personByCpf.set(clienteCpfLimpo, getSigePersonByCpfCnpj(clienteCpfLimpo));
+          }
+          const pessoa = await personByCpf.get(clienteCpfLimpo);
+          contato = normalizeContact(pessoa?.Celular || p.ClienteTelefone || "");
+          if (contato) contactByCpf.set(clienteCpfLimpo, contato);
+        }
 
         let serialNovo = "";
         let respNovo = "Sem vendedor";
@@ -515,7 +543,7 @@ async function run() {
           serialRetirada !== "" ? serialRetirada : 0;
 
         rowsFinal.push([
-          "",
+          contato,
           p.Codigo,
           p.StatusSistema || "",
           GoogleSheets.dateCell(formatarDataBR(dataVendaInput), {
@@ -628,6 +656,7 @@ module.exports.resolveSigeWindow = resolveSigeWindow;
 module.exports.assertNonEmptyWindowReplacement = assertNonEmptyWindowReplacement;
 module.exports.formatarDataBR = formatarDataBR;
 module.exports.formatarMesBR = formatarMesBR;
+module.exports.contactByCpfFromRows = contactByCpfFromRows;
 
 if (require.main === module) {
   run().catch(() => {
