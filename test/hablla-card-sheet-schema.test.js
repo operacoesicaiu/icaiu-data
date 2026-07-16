@@ -6,6 +6,7 @@ const {
   CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
   CUSTOM_FIELD_DISPLAY_NAMES,
+  LEGACY_EXTRA_HEADER_ALIASES,
   MAX_CELL_CHARACTERS,
   TECHNICAL_CARD_HEADERS,
   buildBaseCardRow,
@@ -138,6 +139,20 @@ test("cabecalho tecnico e migrado para o visual sem mudar posicoes", () => {
       "custom_field.desconhecido",
     ],
   );
+});
+
+test("cabecalho visual legado de telefone continua ligado ao campo do card", () => {
+  assert.equal(LEGACY_EXTRA_HEADER_ALIASES["Telefone (Campo)"], "card.phone");
+  const existingHeader = [...CARD_HEADERS, "Telefone (Campo)"];
+  const card = cardFixture({ phone: "+5511999999999" });
+
+  const { header, rows } = buildCardSheet([card], existingHeader, {
+    customFieldIds: FIXED_FIELD_IDS,
+  });
+
+  assert.deepEqual(header.slice(0, existingHeader.length), existingHeader);
+  assert.equal(rows[0][header.indexOf("Telefone (Campo)")], "+5511999999999");
+  assert.equal(header.includes("card.phone"), false);
 });
 
 test("descobertas sao ordenadas e preservam para sempre a ordem existente", () => {

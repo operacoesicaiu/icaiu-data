@@ -72,6 +72,13 @@ const CUSTOM_FIELD_DISPLAY_NAMES = Object.freeze({
   "67b5fbad827b187ab70ab641": "Agendamento realizado?",
 });
 
+// Cabecalhos visuais que ja existem na planilha e representam propriedades
+// dinamicas do card. Mantemos o alias para que uma migracao de rotulos nao
+// transforme uma coluna valida em erro antes da substituicao atomica.
+const LEGACY_EXTRA_HEADER_ALIASES = Object.freeze({
+  "Telefone (Campo)": "card.phone",
+});
+
 const BASE_HEADER_ALIASES = new Map();
 for (let index = 0; index < CARD_HEADERS.length; index += 1) {
   const logical = TECHNICAL_CARD_HEADERS[index];
@@ -270,6 +277,8 @@ function sheetValue(value, header) {
 }
 
 function logicalExtraHeader(header) {
+  const legacy = LEGACY_EXTRA_HEADER_ALIASES[header];
+  if (legacy) return legacy;
   const mappedCustomField = CUSTOM_FIELD_DISPLAY_TO_LOGICAL.get(header);
   if (mappedCustomField) return mappedCustomField;
   if (header.startsWith("custom_field.")) {
@@ -283,6 +292,10 @@ function logicalExtraHeader(header) {
 }
 
 function displayHeaderForLogical(logical) {
+  const legacyDisplay = Object.entries(LEGACY_EXTRA_HEADER_ALIASES).find(
+    ([, legacyLogical]) => legacyLogical === logical,
+  )?.[0];
+  if (legacyDisplay) return legacyDisplay;
   return CUSTOM_FIELD_LOGICAL_TO_DISPLAY.get(logical) || logical;
 }
 
@@ -517,6 +530,7 @@ module.exports = {
   CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
   CUSTOM_FIELD_DISPLAY_NAMES,
+  LEGACY_EXTRA_HEADER_ALIASES,
   MAX_CELL_CHARACTERS,
   TECHNICAL_CARD_HEADERS,
   buildBaseCardRow,
