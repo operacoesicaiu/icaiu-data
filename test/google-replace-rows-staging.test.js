@@ -442,6 +442,10 @@ test("replaceRowsViaStaging preserva linhas, promove e expande colunas", async (
       .updateSheetProperties.properties.gridProperties.rowCount,
     4,
   );
+  assert.equal(
+    promotion.requests.find((request) => request.copyPaste).copyPaste.pasteType,
+    "PASTE_VALUES",
+  );
 });
 
 test("replaceRowsViaStaging preserva e realinha colunas fora de columnRange", async () => {
