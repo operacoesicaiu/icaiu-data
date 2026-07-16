@@ -123,6 +123,16 @@ const FULLY_REPRESENTED_TOP_LEVEL_KEYS = new Set([
   "custom_fields",
 ]);
 
+// Colunas geradas por versoes anteriores para propriedades que ja possuem
+// coluna propria no contrato base. Elas permanecem na planilha para nao
+// deslocar nenhuma coluna, mas deixam de receber valores duplicados.
+const REDUNDANT_LEGACY_CARD_KEYS = new Set([
+  "phone",
+  "tags",
+  "user",
+  "custom_fields",
+]);
+
 const ISO_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/i;
 
@@ -283,7 +293,10 @@ function logicalExtraHeader(header) {
   }
   if (!header.startsWith("card.")) return null;
   const key = header.slice("card.".length);
-  return Boolean(key) && !FULLY_REPRESENTED_TOP_LEVEL_KEYS.has(key)
+  return Boolean(key) && (
+    REDUNDANT_LEGACY_CARD_KEYS.has(key) ||
+    !FULLY_REPRESENTED_TOP_LEVEL_KEYS.has(key)
+  )
     ? header
     : null;
 }
@@ -475,12 +488,14 @@ function dynamicCardValue(card, header) {
 
   if (logical.startsWith("card.")) {
     const key = logical.slice("card.".length);
+    if (REDUNDANT_LEGACY_CARD_KEYS.has(key)) return "";
     return Object.prototype.hasOwnProperty.call(card, key)
       ? sheetValue(card[key], logical)
       : "";
   }
 
   const id = logical.slice("custom_field.".length);
+  if (CARD_CUSTOM_FIELD_IDS.includes(id)) return "";
   const values = [];
   if (Array.isArray(card.custom_fields)) {
     for (const field of card.custom_fields) {
