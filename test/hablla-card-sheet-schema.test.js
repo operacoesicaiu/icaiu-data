@@ -158,6 +158,27 @@ test("telefone do card e telefone do custom field ocupam colunas distintas", () 
   assert.equal(header.includes("card.phone"), false);
 });
 
+test("colunas legadas duplicadas permanecem na posicao, mas nao repetem valores", () => {
+  const oldHeader = [
+    ...CARD_HEADERS,
+    "card.phone",
+    "card.tags",
+    "card.user",
+    "card.custom_fields",
+    `custom_field.${CARD_CUSTOM_FIELD_IDS[0]}`,
+  ];
+  const card = cardFixture();
+  const { header, rows } = buildCardSheet([card], oldHeader, {
+    customFieldIds: FIXED_FIELD_IDS,
+  });
+
+  assert.deepEqual(header.slice(0, oldHeader.length), oldHeader);
+  for (const legacy of oldHeader.slice(CARD_HEADERS.length)) {
+    assert.equal(rows[0][header.indexOf(legacy)], "");
+  }
+  assert.equal(rows[0][header.indexOf("Telefone")], "telefone-card");
+});
+
 test("descobertas sao ordenadas e preservam para sempre a ordem existente", () => {
   const firstHeader = discoverCardSheetHeaders([
     cardFixture({
