@@ -1318,10 +1318,18 @@ class GoogleSheets {
             startColumnIndex: 0,
             endColumnIndex: comparisonWidth,
           },
-          pasteType: "PASTE_NORMAL",
+          // A staging e criada sem a formatacao visual da aba original.
+          // Copiar apenas os valores preserva as fontes, cores, alinhamentos
+          // e formatos de coluna ja configurados na base de destino.
+          pasteType: "PASTE_VALUES",
         },
       });
     }
+    promotionRequests.push(
+      ...formatBlocks.map((block) =>
+        numberFormatRequest(originalSheetId, block),
+      ),
+    );
     const promotionMaxBytes = positiveInteger(
       process.env.GOOGLE_SHEETS_PROMOTION_MAX_BYTES,
       1_500_000,

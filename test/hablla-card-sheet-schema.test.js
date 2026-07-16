@@ -6,7 +6,6 @@ const {
   CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
   CUSTOM_FIELD_DISPLAY_NAMES,
-  LEGACY_EXTRA_HEADER_ALIASES,
   MAX_CELL_CHARACTERS,
   TECHNICAL_CARD_HEADERS,
   buildBaseCardRow,
@@ -23,7 +22,6 @@ const FIXED_FIELD_IDS = [
   "field-two",
   "field-three",
   "field-reason",
-  "field-phone",
 ];
 
 function cardFixture(overrides = {}) {
@@ -46,8 +44,8 @@ function cardFixture(overrides = {}) {
       { custom_field: FIXED_FIELD_IDS[1], value: "valor-dois" },
       { custom_field: FIXED_FIELD_IDS[2], value: "valor-tres" },
       { custom_field: FIXED_FIELD_IDS[3], value: "motivo-teste" },
-      { custom_field: FIXED_FIELD_IDS[4], value: "telefone-teste" },
     ],
+    phone: "telefone-card",
     ...overrides,
   };
 }
@@ -106,7 +104,7 @@ test("as 19 colunas base usam nomes visuais e a linha reproduz o contrato atual"
     "Pessoa Teste",
     "motivo-teste",
     "tag-a, tag-b",
-    "telefone-teste",
+    "telefone-card",
   ]);
 });
 
@@ -141,17 +139,22 @@ test("cabecalho tecnico e migrado para o visual sem mudar posicoes", () => {
   );
 });
 
-test("cabecalho visual legado de telefone continua ligado ao campo do card", () => {
-  assert.equal(LEGACY_EXTRA_HEADER_ALIASES["Telefone (Campo)"], "card.phone");
+test("telefone do card e telefone do custom field ocupam colunas distintas", () => {
   const existingHeader = [...CARD_HEADERS, "Telefone (Campo)"];
-  const card = cardFixture({ phone: "+5511999999999" });
+  const card = cardFixture({
+    phone: "+5511999999999",
+    custom_fields: [
+      { custom_field: "69e8d49592607a5877e699d5", value: "+5511888888888" },
+    ],
+  });
 
   const { header, rows } = buildCardSheet([card], existingHeader, {
     customFieldIds: FIXED_FIELD_IDS,
   });
 
   assert.deepEqual(header.slice(0, existingHeader.length), existingHeader);
-  assert.equal(rows[0][header.indexOf("Telefone (Campo)")], "+5511999999999");
+  assert.equal(rows[0][header.indexOf("Telefone")], "5511999999999");
+  assert.equal(rows[0][header.indexOf("Telefone (Campo)")], "5511888888888");
   assert.equal(header.includes("card.phone"), false);
 });
 
@@ -168,9 +171,6 @@ test("descobertas sao ordenadas e preservam para sempre a ordem existente", () =
   ]);
   assert.deepEqual(firstHeader.slice(19), [
     "card.alpha",
-    "card.custom_fields",
-    "card.tags",
-    "card.user",
     "card.zeta",
     "custom_field.field-alpha",
     "custom_field.field-zeta",
@@ -195,14 +195,13 @@ test("descobertas sao ordenadas e preservam para sempre a ordem existente", () =
   assert.deepEqual(nextHeader, [
     ...existing,
     "card.beta",
-    "card.custom_fields",
     "custom_field.field-new",
   ]);
   assert.deepEqual(discoverCardSheetHeaders([], nextHeader), nextHeader);
 });
 
 test("IDs conhecidos recebem nomes visuais e desconhecidos permanecem tecnicos", () => {
-  assert.equal(Object.keys(CUSTOM_FIELD_DISPLAY_NAMES).length, 22);
+  assert.equal(Object.keys(CUSTOM_FIELD_DISPLAY_NAMES).length, 23);
   const knownFields = Object.entries(CUSTOM_FIELD_DISPLAY_NAMES).map(
     ([custom_field, display], index) => ({
       custom_field,
@@ -221,6 +220,7 @@ test("IDs conhecidos recebem nomes visuais e desconhecidos permanecem tecnicos",
   });
 
   for (const { custom_field, value, display } of knownFields) {
+    if (CARD_CUSTOM_FIELD_IDS.includes(custom_field)) continue;
     assert.equal(header.includes(`custom_field.${custom_field}`), false);
     assert.equal(rows[0][header.indexOf(display)], value);
   }
@@ -286,16 +286,17 @@ test("remove apostrofo de escape e mais inicial apenas de telefone", () => {
   assert.equal(sheetValue("+campanha", "card.name"), "+campanha");
   assert.equal(normalizePhoneValue("'+5511999999999"), "5511999999999");
 
-  const phoneId = CARD_CUSTOM_FIELD_IDS[4];
+  const phoneId = "69e8d49592607a5877e699d5";
   const card = cardFixture({
     name: "'Card sem escape",
-    custom_fields: [{ custom_field: phoneId, value: "+5511999999999" }],
+    phone: "+5511999999999",
+    custom_fields: [{ custom_field: phoneId, value: "+5511888888888" }],
   });
   const header = discoverCardSheetHeaders([card]);
   const row = buildCardSheetRow(card, header);
   assert.equal(row[8], "Card sem escape");
   assert.equal(row[18], "5511999999999");
-  assert.equal(row[header.indexOf(`custom_field.${phoneId}`)], "5511999999999");
+  assert.equal(row[header.indexOf("Telefone (Campo)")], "5511888888888");
 });
 
 test("cada custom field ganha coluna e IDs repetidos viram JSON estavel sem perda", () => {

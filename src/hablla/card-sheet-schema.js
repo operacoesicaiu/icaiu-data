@@ -70,13 +70,7 @@ const CUSTOM_FIELD_DISPLAY_NAMES = Object.freeze({
   "67b5fc4b9d6e187ed4fa31fa": "Motivo do não agendamento?",
   "67b5fd5e5f04cc2397fc2fd3": "Observação do não agendamento",
   "67b5fbad827b187ab70ab641": "Agendamento realizado?",
-});
-
-// Cabecalhos visuais que ja existem na planilha e representam propriedades
-// dinamicas do card. Mantemos o alias para que uma migracao de rotulos nao
-// transforme uma coluna valida em erro antes da substituicao atomica.
-const LEGACY_EXTRA_HEADER_ALIASES = Object.freeze({
-  "Telefone (Campo)": "card.phone",
+  "69e8d49592607a5877e699d5": "Telefone (Campo)",
 });
 
 const BASE_HEADER_ALIASES = new Map();
@@ -107,8 +101,9 @@ const CARD_CUSTOM_FIELD_IDS = Object.freeze([
   "67b608470787782ce7acafba",
   "67dc6a0a17925c23d8365708",
   "679120ec177ff6d2c7597156",
-  "69e8d49592607a5877e699d5",
 ]);
+
+const PHONE_CUSTOM_FIELD_ID = "69e8d49592607a5877e699d5";
 
 const FULLY_REPRESENTED_TOP_LEVEL_KEYS = new Set([
   "updated_at",
@@ -122,6 +117,10 @@ const FULLY_REPRESENTED_TOP_LEVEL_KEYS = new Set([
   "status",
   "finished_at",
   "id",
+  "phone",
+  "tags",
+  "user",
+  "custom_fields",
 ]);
 
 const ISO_DATE_TIME_PATTERN =
@@ -277,8 +276,6 @@ function sheetValue(value, header) {
 }
 
 function logicalExtraHeader(header) {
-  const legacy = LEGACY_EXTRA_HEADER_ALIASES[header];
-  if (legacy) return legacy;
   const mappedCustomField = CUSTOM_FIELD_DISPLAY_TO_LOGICAL.get(header);
   if (mappedCustomField) return mappedCustomField;
   if (header.startsWith("custom_field.")) {
@@ -292,10 +289,6 @@ function logicalExtraHeader(header) {
 }
 
 function displayHeaderForLogical(logical) {
-  const legacyDisplay = Object.entries(LEGACY_EXTRA_HEADER_ALIASES).find(
-    ([, legacyLogical]) => legacyLogical === logical,
-  )?.[0];
-  if (legacyDisplay) return legacyDisplay;
   return CUSTOM_FIELD_LOGICAL_TO_DISPLAY.get(logical) || logical;
 }
 
@@ -394,7 +387,7 @@ function discoverCardSheetHeaders(cards, existingHeader = CARD_HEADERS) {
     if (Array.isArray(card.custom_fields)) {
       for (const field of card.custom_fields) {
         const id = customFieldId(field);
-        if (id === null) continue;
+        if (id === null || CARD_CUSTOM_FIELD_IDS.includes(id)) continue;
         const logical = `custom_field.${id}`;
         assertCellSize(logical, "Cabecalho dinamico Hablla Card");
         if (!known.has(logical)) discovered.add(logical);
@@ -415,8 +408,8 @@ function buildBaseCardRow(card, { customFieldIds = CARD_CUSTOM_FIELD_IDS } = {})
   if (!card || typeof card !== "object" || Array.isArray(card)) {
     throw new Error("Card Hablla invalido");
   }
-  if (!Array.isArray(customFieldIds) || customFieldIds.length !== 5) {
-    throw new Error("Hablla Card exige exatamente cinco custom fields base");
+  if (!Array.isArray(customFieldIds) || customFieldIds.length !== 4) {
+    throw new Error("Hablla Card exige exatamente quatro custom fields base");
   }
 
   const normalizedIds = customFieldIds.map(String);
@@ -455,7 +448,7 @@ function buildBaseCardRow(card, { customFieldIds = CARD_CUSTOM_FIELD_IDS } = {})
     userName,
     fields[3],
     (card.tags || []).map((tag) => tag.name).join(", "),
-    normalizePhoneValue(fields[4]),
+    normalizePhoneValue(card.phone || ""),
   ];
 }
 
@@ -493,7 +486,7 @@ function dynamicCardValue(card, header) {
     for (const field of card.custom_fields) {
       if (customFieldId(field) === id) {
         values.push(
-          id === CARD_CUSTOM_FIELD_IDS[4]
+          id === PHONE_CUSTOM_FIELD_ID
             ? normalizePhoneValue(field.value)
             : field.value,
         );
@@ -530,7 +523,6 @@ module.exports = {
   CARD_CUSTOM_FIELD_IDS,
   CARD_HEADERS,
   CUSTOM_FIELD_DISPLAY_NAMES,
-  LEGACY_EXTRA_HEADER_ALIASES,
   MAX_CELL_CHARACTERS,
   TECHNICAL_CARD_HEADERS,
   buildBaseCardRow,
