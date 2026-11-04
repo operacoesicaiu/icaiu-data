@@ -1,8 +1,9 @@
 name: Hablla Clients
 
 on:
-  schedule:
-    - cron: '02 3,9,15,21 * * *'
+  # Agendamento desativado temporariamente: Supabase PGRST205.
+  # schedule:
+  # - cron: '02 3,9,15,21 * * *'
   workflow_dispatch:
 
 concurrency:

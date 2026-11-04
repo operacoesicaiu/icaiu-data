@@ -1,8 +1,9 @@
 name: Zoho Scheduling
 
 on:
-  schedule:
-    - cron: '05 15 * * *'
+  # Agendamento desativado temporariamente: Supabase PGRST205.
+  # schedule:
+  # - cron: '05 15 * * *'
   workflow_dispatch:
 
 concurrency:

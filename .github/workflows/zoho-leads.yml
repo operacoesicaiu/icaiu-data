@@ -1,8 +1,9 @@
 name: Zoho Leads
 
 on:
-  schedule:
-    - cron: '27 16 * * *'
+  # Agendamento desativado temporariamente: Supabase PGRST205.
+  # schedule:
+  # - cron: '27 16 * * *'
   workflow_dispatch:
 
 concurrency:
